@@ -548,19 +548,30 @@ class _ChatScreenState extends State<ChatScreen> {
         var photosStatus = await Permission.photos.status;
         print('📷 Photos permission status: $photosStatus');
         
-        // На iOS всегда запрашиваем разрешение, если оно не предоставлено
-        if (!photosStatus.isGranted) {
-          print('📷 Requesting photos permission...');
-          photosStatus = await Permission.photos.request();
-          print('📷 Photos permission after request: $photosStatus');
-        }
+        // На iOS всегда запрашиваем разрешение явно
+        // Это важно для эмулятора и устройств, где разрешение может быть не определено
+        print('📷 Requesting photos permission...');
+        photosStatus = await Permission.photos.request();
+        print('📷 Photos permission after request: $photosStatus');
+        
+        // Проверяем статус еще раз после запроса
+        photosStatus = await Permission.photos.status;
+        print('📷 Photos permission final status: $photosStatus');
         
         // Если разрешение на фото не предоставлено, пробуем запросить разрешение на медиа
         if (!photosStatus.isGranted) {
+          print('📷 Trying mediaLibrary permission...');
           var mediaStatus = await Permission.mediaLibrary.status;
-          if (!mediaStatus.isGranted) {
-            mediaStatus = await Permission.mediaLibrary.request();
-          }
+          print('📷 MediaLibrary permission status: $mediaStatus');
+          
+          print('📷 Requesting mediaLibrary permission...');
+          mediaStatus = await Permission.mediaLibrary.request();
+          print('📷 MediaLibrary permission after request: $mediaStatus');
+          
+          // Проверяем статус еще раз после запроса
+          mediaStatus = await Permission.mediaLibrary.status;
+          print('📷 MediaLibrary permission final status: $mediaStatus');
+          
           if (!mediaStatus.isGranted) {
             print('❌ Photos/media permission not granted');
             if (mounted) {
