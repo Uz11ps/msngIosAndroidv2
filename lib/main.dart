@@ -34,31 +34,17 @@ Future<void> _requestPermissions() async {
   if (kIsWeb) return;
   
   try {
-    // Запрашиваем разрешение на микрофон (для iOS и Android)
+    // На iOS не запрашиваем разрешения при запуске - они будут запрошены при использовании функций
+    // Это соответствует рекомендациям Apple - запрашивать разрешения контекстно
+    
+    // Только проверяем статус и логируем
     final microphoneStatus = await Permission.microphone.status;
-    if (microphoneStatus.isDenied) {
-      print('🎤 Requesting microphone permission...');
-      final result = await Permission.microphone.request();
-      print('🎤 Microphone permission: ${result.toString()}');
-    } else if (microphoneStatus.isGranted) {
-      print('✅ Microphone permission already granted');
-    } else if (microphoneStatus.isPermanentlyDenied) {
-      print('⚠️ Microphone permission permanently denied');
-    }
+    print('🎤 Microphone permission status on startup: $microphoneStatus');
     
-    // Запрашиваем разрешение на камеру (для iOS и Android)
     final cameraStatus = await Permission.camera.status;
-    if (cameraStatus.isDenied) {
-      print('📷 Requesting camera permission...');
-      final result = await Permission.camera.request();
-      print('📷 Camera permission: ${result.toString()}');
-    } else if (cameraStatus.isGranted) {
-      print('✅ Camera permission already granted');
-    } else if (cameraStatus.isPermanentlyDenied) {
-      print('⚠️ Camera permission permanently denied');
-    }
+    print('📷 Camera permission status on startup: $cameraStatus');
     
-    // Для Android 13+ запрашиваем разрешение на уведомления
+    // Для Android 13+ запрашиваем разрешение на уведомления при запуске
     // На iOS уведомления запрашиваются автоматически при первом использовании
     if (!kIsWeb) {
       try {
@@ -76,7 +62,7 @@ Future<void> _requestPermissions() async {
       }
     }
   } catch (e) {
-    print('❌ Error requesting permissions: $e');
+    print('❌ Error checking permissions: $e');
   }
 }
 

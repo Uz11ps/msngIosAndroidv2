@@ -533,7 +533,53 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _pickAndSendImage() async {
+    if (kIsWeb) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Выбор изображений не поддерживается в веб-версии')),
+        );
+      }
+      return;
+    }
+    
     try {
+      // Запрашиваем разрешение на доступ к галерее (для iOS 14+)
+      if (!kIsWeb) {
+        var photosStatus = await Permission.photos.status;
+        print('📷 Photos permission status: $photosStatus');
+        
+        // На iOS всегда запрашиваем разрешение, если оно не предоставлено
+        if (!photosStatus.isGranted) {
+          print('📷 Requesting photos permission...');
+          photosStatus = await Permission.photos.request();
+          print('📷 Photos permission after request: $photosStatus');
+        }
+        
+        // Если разрешение на фото не предоставлено, пробуем запросить разрешение на медиа
+        if (!photosStatus.isGranted) {
+          var mediaStatus = await Permission.mediaLibrary.status;
+          if (!mediaStatus.isGranted) {
+            mediaStatus = await Permission.mediaLibrary.request();
+          }
+          if (!mediaStatus.isGranted) {
+            print('❌ Photos/media permission not granted');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: const Text('Необходимо разрешение на доступ к галерее'),
+                  action: SnackBarAction(
+                    label: 'Настройки',
+                    onPressed: () => openAppSettings(),
+                  ),
+                  duration: const Duration(seconds: 5),
+                ),
+              );
+            }
+            return;
+          }
+        }
+      }
+      
       final XFile? image = await _picker.pickImage(
         source: ImageSource.gallery,
         maxWidth: 1920,
@@ -600,7 +646,8 @@ class _ChatScreenState extends State<ChatScreen> {
         var microphoneStatus = await Permission.microphone.status;
         print('🎤 Microphone permission status: $microphoneStatus');
         
-        if (microphoneStatus.isDenied || microphoneStatus.isRestricted) {
+        // На iOS всегда запрашиваем разрешение, если оно не предоставлено
+        if (!microphoneStatus.isGranted) {
           print('🎤 Requesting microphone permission...');
           microphoneStatus = await Permission.microphone.request();
           print('🎤 Microphone permission after request: $microphoneStatus');
@@ -616,6 +663,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   label: 'Настройки',
                   onPressed: () => openAppSettings(),
                 ),
+                duration: const Duration(seconds: 5),
               ),
             );
           }
@@ -628,7 +676,8 @@ class _ChatScreenState extends State<ChatScreen> {
           var cameraStatus = await Permission.camera.status;
           print('📷 Camera permission status: $cameraStatus');
           
-          if (cameraStatus.isDenied || cameraStatus.isRestricted) {
+          // На iOS всегда запрашиваем разрешение, если оно не предоставлено
+          if (!cameraStatus.isGranted) {
             print('📷 Requesting camera permission...');
             cameraStatus = await Permission.camera.request();
             print('📷 Camera permission after request: $cameraStatus');
@@ -644,6 +693,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     label: 'Настройки',
                     onPressed: () => openAppSettings(),
                   ),
+                  duration: const Duration(seconds: 5),
                 ),
               );
             }
@@ -728,7 +778,8 @@ class _ChatScreenState extends State<ChatScreen> {
       var microphoneStatus = await Permission.microphone.status;
       print('🎤 Microphone permission status for recording: $microphoneStatus');
       
-      if (microphoneStatus.isDenied || microphoneStatus.isRestricted) {
+      // На iOS всегда запрашиваем разрешение, если оно не предоставлено
+      if (!microphoneStatus.isGranted) {
         print('🎤 Requesting microphone permission for recording...');
         microphoneStatus = await Permission.microphone.request();
         print('🎤 Microphone permission after request: $microphoneStatus');
@@ -744,6 +795,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 label: 'Настройки',
                 onPressed: () => openAppSettings(),
               ),
+              duration: const Duration(seconds: 5),
             ),
           );
         }
