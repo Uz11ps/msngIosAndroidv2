@@ -61,12 +61,24 @@ ios/Runner/GeneratedPluginRegistrant.*
 бекенд/.npm/
 бекенд/.pm2/
 бекенд/uploads/
+бекенд/messenger/backend/uploads/
 бекенд/database.sqlite
 backend/node_modules/
 backend/.npm/
 backend/.pm2/
 backend/uploads/
+backend/messenger/backend/uploads/
 backend/database.sqlite
+
+# Large media files (should not be in Git)
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.m4a
+*.mp3
+*.wav
+*.flac
 
 # IDE
 .vscode/
