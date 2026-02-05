@@ -646,12 +646,15 @@ class _ChatScreenState extends State<ChatScreen> {
         var microphoneStatus = await Permission.microphone.status;
         print('🎤 Microphone permission status: $microphoneStatus');
         
-        // На iOS всегда запрашиваем разрешение, если оно не предоставлено
-        if (!microphoneStatus.isGranted) {
-          print('🎤 Requesting microphone permission...');
-          microphoneStatus = await Permission.microphone.request();
-          print('🎤 Microphone permission after request: $microphoneStatus');
-        }
+        // На iOS всегда запрашиваем разрешение явно
+        // Это важно для эмулятора и устройств, где разрешение может быть не определено
+        print('🎤 Requesting microphone permission...');
+        microphoneStatus = await Permission.microphone.request();
+        print('🎤 Microphone permission after request: $microphoneStatus');
+        
+        // Проверяем статус еще раз после запроса
+        microphoneStatus = await Permission.microphone.status;
+        print('🎤 Microphone permission final status: $microphoneStatus');
         
         if (!microphoneStatus.isGranted) {
           print('❌ Microphone permission not granted: $microphoneStatus');
@@ -676,12 +679,14 @@ class _ChatScreenState extends State<ChatScreen> {
           var cameraStatus = await Permission.camera.status;
           print('📷 Camera permission status: $cameraStatus');
           
-          // На iOS всегда запрашиваем разрешение, если оно не предоставлено
-          if (!cameraStatus.isGranted) {
-            print('📷 Requesting camera permission...');
-            cameraStatus = await Permission.camera.request();
-            print('📷 Camera permission after request: $cameraStatus');
-          }
+          // На iOS всегда запрашиваем разрешение явно
+          print('📷 Requesting camera permission...');
+          cameraStatus = await Permission.camera.request();
+          print('📷 Camera permission after request: $cameraStatus');
+          
+          // Проверяем статус еще раз после запроса
+          cameraStatus = await Permission.camera.status;
+          print('📷 Camera permission final status: $cameraStatus');
           
           if (!cameraStatus.isGranted) {
             print('❌ Camera permission not granted: $cameraStatus');
@@ -778,12 +783,15 @@ class _ChatScreenState extends State<ChatScreen> {
       var microphoneStatus = await Permission.microphone.status;
       print('🎤 Microphone permission status for recording: $microphoneStatus');
       
-      // На iOS всегда запрашиваем разрешение, если оно не предоставлено
-      if (!microphoneStatus.isGranted) {
-        print('🎤 Requesting microphone permission for recording...');
-        microphoneStatus = await Permission.microphone.request();
-        print('🎤 Microphone permission after request: $microphoneStatus');
-      }
+      // На iOS всегда запрашиваем разрешение явно
+      // Это важно для эмулятора и устройств, где разрешение может быть не определено
+      print('🎤 Requesting microphone permission for recording...');
+      microphoneStatus = await Permission.microphone.request();
+      print('🎤 Microphone permission after request: $microphoneStatus');
+      
+      // Проверяем статус еще раз после запроса
+      microphoneStatus = await Permission.microphone.status;
+      print('🎤 Microphone permission final status: $microphoneStatus');
       
       if (!microphoneStatus.isGranted) {
         print('❌ Microphone permission not granted for recording: $microphoneStatus');
