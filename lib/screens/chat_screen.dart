@@ -573,21 +573,45 @@ class _ChatScreenState extends State<ChatScreen> {
           print('📷 MediaLibrary permission final status: $mediaStatus');
           
           if (!mediaStatus.isGranted) {
-            print('❌ Photos/media permission not granted');
+            print('❌ Photos/media permission not granted: $mediaStatus');
             if (mounted) {
+              final message = mediaStatus.isPermanentlyDenied
+                  ? 'Разрешение на доступ к галерее было отклонено. Пожалуйста, включите его в настройках приложения.'
+                  : 'Необходимо разрешение на доступ к галерее';
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: const Text('Необходимо разрешение на доступ к галерее'),
+                  content: Text(message),
                   action: SnackBarAction(
                     label: 'Настройки',
                     onPressed: () => openAppSettings(),
                   ),
-                  duration: const Duration(seconds: 5),
+                  duration: const Duration(seconds: 7),
                 ),
               );
             }
             return;
           }
+        }
+        
+        // Если разрешение на фото тоже не предоставлено, показываем сообщение
+        if (!photosStatus.isGranted) {
+          print('❌ Photos permission not granted: $photosStatus');
+          if (mounted) {
+            final message = photosStatus.isPermanentlyDenied
+                ? 'Разрешение на доступ к галерее было отклонено. Пожалуйста, включите его в настройках приложения.'
+                : 'Необходимо разрешение на доступ к галерее';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(message),
+                action: SnackBarAction(
+                  label: 'Настройки',
+                  onPressed: () => openAppSettings(),
+                ),
+                duration: const Duration(seconds: 7),
+              ),
+            );
+          }
+          return;
         }
       }
       
@@ -670,14 +694,17 @@ class _ChatScreenState extends State<ChatScreen> {
         if (!microphoneStatus.isGranted) {
           print('❌ Microphone permission not granted: $microphoneStatus');
           if (mounted) {
+            final message = microphoneStatus.isPermanentlyDenied
+                ? 'Разрешение на микрофон было отклонено. Пожалуйста, включите его в настройках приложения.'
+                : 'Необходимо разрешение на использование микрофона';
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: const Text('Необходимо разрешение на использование микрофона'),
+                content: Text(message),
                 action: SnackBarAction(
                   label: 'Настройки',
                   onPressed: () => openAppSettings(),
                 ),
-                duration: const Duration(seconds: 5),
+                duration: const Duration(seconds: 7),
               ),
             );
           }
@@ -702,14 +729,17 @@ class _ChatScreenState extends State<ChatScreen> {
           if (!cameraStatus.isGranted) {
             print('❌ Camera permission not granted: $cameraStatus');
             if (mounted) {
+              final message = cameraStatus.isPermanentlyDenied
+                  ? 'Разрешение на камеру было отклонено. Пожалуйста, включите его в настройках приложения.'
+                  : 'Необходимо разрешение на использование камеры';
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: const Text('Необходимо разрешение на использование камеры'),
+                  content: Text(message),
                   action: SnackBarAction(
                     label: 'Настройки',
                     onPressed: () => openAppSettings(),
                   ),
-                  duration: const Duration(seconds: 5),
+                  duration: const Duration(seconds: 7),
                 ),
               );
             }
@@ -807,14 +837,17 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!microphoneStatus.isGranted) {
         print('❌ Microphone permission not granted for recording: $microphoneStatus');
         if (mounted) {
+          final message = microphoneStatus.isPermanentlyDenied
+              ? 'Разрешение на микрофон было отклонено. Пожалуйста, включите его в настройках приложения для записи голосовых сообщений.'
+              : 'Необходимо разрешение на использование микрофона для записи голосовых сообщений';
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Необходимо разрешение на использование микрофона для записи голосовых сообщений'),
+              content: Text(message),
               action: SnackBarAction(
                 label: 'Настройки',
                 onPressed: () => openAppSettings(),
               ),
-              duration: const Duration(seconds: 5),
+              duration: const Duration(seconds: 7),
             ),
           );
         }
