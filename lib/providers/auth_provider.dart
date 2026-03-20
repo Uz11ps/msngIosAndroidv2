@@ -12,33 +12,77 @@ class AuthProvider with ChangeNotifier {
   User? _currentUser;
   bool _isLoading = false;
   String? _errorMessage;
+  bool _otpSent = false;
+  String? _otpPhoneNumber;
+  bool _isPhoneLogin = false;
 
   User? get currentUser => _currentUser;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
   bool get isLoggedIn => _currentUser != null;
+  bool get otpSent => _otpSent;
+  String? get otpPhoneNumber => _otpPhoneNumber;
+  bool get isPhoneLogin => _isPhoneLogin;
   SocketService get socketService => _socketService;
   ApiService get apiService => _apiService;
+  
+  void setPhoneLogin(bool value) {
+    _isPhoneLogin = value;
+    notifyListeners();
+  }
 
   Future<void> init() async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      final token = await _authService.getToken();
+      print('👤 AuthProvider: Initializing...');
+      // Добавляем таймаут для предотвращения зависания при проблемах с сетью
+      final token = await _authService.getToken()
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              print('⚠️ AuthProvider: Token retrieval timeout');
+              return null;
+            },
+          );
+      
       if (token != null) {
+        print('👤 AuthProvider: Token found, loading user...');
         _apiService.setToken(token);
-        _currentUser = await _authService.getUser();
+        _currentUser = await _authService.getUser()
+            .timeout(
+              const Duration(seconds: 5),
+              onTimeout: () {
+                print('⚠️ AuthProvider: User retrieval timeout');
+                return null;
+              },
+            );
+        
         if (_currentUser != null) {
-          _socketService.initialize(_currentUser!.id, token);
+          print('👤 AuthProvider: User loaded, initializing socket...');
+          // Инициализация Socket не должна блокировать запуск приложения
+          try {
+            _socketService.initialize(_currentUser!.id, token);
+          } catch (e) {
+            print('⚠️ AuthProvider: Socket initialization error (non-critical): $e');
+            // Не прерываем запуск приложения из-за ошибки Socket
+          }
+        } else {
+          print('⚠️ AuthProvider: User is null after loading');
         }
+      } else {
+        print('👤 AuthProvider: No token found, user needs to login');
       }
-    } catch (e) {
-      print('Error initializing auth: $e');
+    } catch (e, stackTrace) {
+      print('💥 AuthProvider: Initialization error: $e');
+      print('💥 Stack trace: $stackTrace');
+      // Не блокируем запуск приложения из-за ошибки инициализации
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+      print('👤 AuthProvider: Initialization completed');
     }
-
-    _isLoading = false;
-    notifyListeners();
   }
 
   Future<bool> login(String email, String password) async {
@@ -121,26 +165,67 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
 
     try {
+      print('👤 AuthProvider: Starting registration...');
+      print('👤 AuthProvider: Email: $email');
+      print('👤 AuthProvider: DisplayName: $displayName');
+      
       final success =
           await _authService.register(email, password, displayName);
+      
+      print('👤 AuthProvider: Registration success: $success');
+      
       if (success) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        
         _currentUser = await _authService.getUser();
         final token = await _authService.getToken();
+        print('👤 AuthProvider: User loaded: ${_currentUser?.id}');
+        print('👤 AuthProvider: Token loaded: ${token != null}');
+        
         if (_currentUser != null && token != null) {
           _apiService.setToken(token);
-          _socketService.initialize(_currentUser!.id, token);
+          if (!_socketService.isConnected || _socketService.socket == null) {
+            _socketService.initialize(_currentUser!.id, token);
+            print('👤 AuthProvider: Socket initialized');
+          }
+          _isLoading = false;
+          notifyListeners();
+          print('👤 AuthProvider: Registration completed successfully');
+          return true;
+        } else {
+          print('⚠️ AuthProvider: User or token is null after registration!');
+          await Future.delayed(const Duration(milliseconds: 200));
+          _currentUser = await _authService.getUser();
+          final retryToken = await _authService.getToken();
+          
+          if (_currentUser != null && retryToken != null) {
+            _apiService.setToken(retryToken);
+            if (!_socketService.isConnected || _socketService.socket == null) {
+              _socketService.initialize(_currentUser!.id, retryToken);
+            }
+            _isLoading = false;
+            notifyListeners();
+            print('👤 AuthProvider: Retry successful after registration');
+            return true;
+          } else {
+            _errorMessage = 'Ошибка загрузки данных пользователя';
+            _isLoading = false;
+            notifyListeners();
+            print('👤 AuthProvider: Retry failed after registration');
+            return false;
+          }
         }
-        _isLoading = false;
-        notifyListeners();
-        return true;
       } else {
-        _errorMessage = 'Ошибка регистрации';
+        _errorMessage = _authService.errorMessage ?? 'Ошибка регистрации';
         _isLoading = false;
         notifyListeners();
+        print('👤 AuthProvider: Registration failed: $_errorMessage');
         return false;
       }
-    } catch (e) {
-      _errorMessage = 'Ошибка регистрации: $e';
+    } catch (e, stackTrace) {
+      print('💥 AuthProvider register exception: $e');
+      print('💥 Stack trace: $stackTrace');
+      _errorMessage = _authService.errorMessage ?? 'Ошибка регистрации: $e';
       _isLoading = false;
       notifyListeners();
       return false;
@@ -172,21 +257,40 @@ class AuthProvider with ChangeNotifier {
     try {
       final success = await _authService.sendOtp(phoneNumber);
       if (success) {
+        _otpSent = true;
+        _otpPhoneNumber = phoneNumber;
         _isLoading = false;
         notifyListeners();
         return true;
       } else {
         _errorMessage = _authService.errorMessage ?? 'Ошибка отправки SMS';
+        _otpSent = false;
+        _otpPhoneNumber = null;
         _isLoading = false;
         notifyListeners();
         return false;
       }
     } catch (e) {
       _errorMessage = 'Ошибка отправки SMS: $e';
+      _otpSent = false;
+      _otpPhoneNumber = null;
       _isLoading = false;
       notifyListeners();
       return false;
     }
+  }
+  
+  void resetOtpState() {
+    _otpSent = false;
+    _otpPhoneNumber = null;
+    notifyListeners();
+  }
+  
+  void resetLoginState() {
+    _otpSent = false;
+    _otpPhoneNumber = null;
+    _isPhoneLogin = false;
+    notifyListeners();
   }
 
   Future<bool> verifyOtp(String phoneNumber, String code, {String? displayName}) async {
@@ -213,6 +317,9 @@ class AuthProvider with ChangeNotifier {
             _socketService.initialize(_currentUser!.id, token);
             print('👤 AuthProvider: Socket initialized');
           }
+          // Сбрасываем состояние OTP после успешного входа
+          _otpSent = false;
+          _otpPhoneNumber = null;
           _isLoading = false;
           notifyListeners();
           print('👤 AuthProvider: Returning true');

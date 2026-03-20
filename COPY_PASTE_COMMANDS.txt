@@ -1,0 +1,103 @@
+# Команды для быстрой настройки HTTPS - просто копируйте и вставляйте
+
+# ============================================
+# ШАГ 1: Подключение к серверу
+# ============================================
+ssh root@83.166.246.225
+# Пароль: kcokmkzgHQ5dJOBF
+
+# ============================================
+# ШАГ 2: Установка необходимых пакетов
+# ============================================
+apt update && apt upgrade -y
+apt install -y nginx certbot python3-certbot-nginx openssl ufw curl
+
+# ============================================
+# ШАГ 3: Создание SSL сертификата
+# ============================================
+mkdir -p /etc/nginx/ssl
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl/server.key -out /etc/nginx/ssl/server.crt -subj "/C=RU/ST=Moscow/L=Moscow/O=MessengerApp/CN=83.166.246.225"
+chmod 600 /etc/nginx/ssl/server.key
+chmod 644 /etc/nginx/ssl/server.crt
+
+# ============================================
+# ШАГ 4: Создание конфигурации Nginx
+# ============================================
+cat > /etc/nginx/sites-available/messenger-app << 'NGINXCONF'
+server {
+    listen 80;
+    listen [::]:80;
+    server_name 83.166.246.225;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name 83.166.246.225;
+    
+    ssl_certificate /etc/nginx/ssl/server.crt;
+    ssl_certificate_key /etc/nginx/ssl/server.key;
+    
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    client_max_body_size 100M;
+    
+    access_log /var/log/nginx/messenger-access.log;
+    error_log /var/log/nginx/messenger-error.log;
+    
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+        proxy_buffering off;
+    }
+}
+NGINXCONF
+
+# ============================================
+# ШАГ 5: Активация конфигурации
+# ============================================
+ln -sf /etc/nginx/sites-available/messenger-app /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+nginx -t
+
+# ============================================
+# ШАГ 6: Запуск и перезагрузка Nginx
+# ============================================
+systemctl enable nginx
+systemctl start nginx
+systemctl reload nginx
+
+# ============================================
+# ШАГ 7: Настройка файрвола
+# ============================================
+ufw --force enable
+ufw allow 22/tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw status
+
+# ============================================
+# ШАГ 8: Проверка работы
+# ============================================
+curl -k https://localhost
+netstat -tuln | grep -E ':(80|443|3000)'
+systemctl status nginx
+
+# ============================================
+# ГОТОВО! HTTPS настроен
+# ============================================
+# Ваше приложение доступно по адресу: https://83.166.246.225
+# Проверьте в браузере: https://83.166.246.225

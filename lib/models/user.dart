@@ -19,16 +19,33 @@ class User {
     this.fcmToken,
   });
 
+  static String? _asString(dynamic value) {
+    if (value == null) return null;
+    final text = value.toString().trim();
+    return text.isEmpty ? null : text;
+  }
+
+  static int? _asInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString());
+  }
+
   factory User.fromJson(Map<String, dynamic> json) {
+    final parsedId = _asString(json['id']);
+    if (parsedId == null) {
+      throw const FormatException('User id is missing in response');
+    }
     return User(
-      id: json['id'] as String,
-      phoneNumber: json['phoneNumber'] as String?,
-      email: json['email'] as String?,
-      displayName: json['displayName'] as String?,
-      photoUrl: json['photoUrl'] as String?,
-      status: json['status'] as String?,
-      lastSeen: json['lastSeen'] as int?,
-      fcmToken: json['fcmToken'] as String?,
+      id: parsedId,
+      phoneNumber: _asString(json['phoneNumber']),
+      email: _asString(json['email']),
+      displayName: _asString(json['displayName']),
+      photoUrl: _asString(json['photoUrl']),
+      status: _asString(json['status']),
+      lastSeen: _asInt(json['lastSeen']),
+      fcmToken: _asString(json['fcmToken']),
     );
   }
 

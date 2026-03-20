@@ -6,6 +6,7 @@ import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../utils/image_utils.dart';
+import '../widgets/adaptive_avatar.dart';
 import 'chat_screen.dart';
 import 'profile_screen.dart';
 import 'create_chat_screen.dart';
@@ -19,6 +20,9 @@ class ChatsScreen extends StatefulWidget {
 }
 
 class _ChatsScreenState extends State<ChatsScreen> {
+  final Map<String, Future<Map<String, String>?>> _userInfoFutures =
+      <String, Future<Map<String, String>?>>{};
+
   @override
   void initState() {
     super.initState();
@@ -75,6 +79,10 @@ class _ChatsScreenState extends State<ChatsScreen> {
       print('❌ Stack trace: $stackTrace');
     }
     return null;
+  }
+
+  Future<Map<String, String>?> _getUserInfoFuture(String userId) {
+    return _userInfoFutures.putIfAbsent(userId, () => _loadUserInfo(userId));
   }
 
   String _formatTimestamp(int? timestamp) {
@@ -164,7 +172,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                           return FutureBuilder<Map<String, String>?>(
                             key: ValueKey('chat_${chat.id}_unread_$unreadCount'),
                             future: !chat.isGroup && otherParticipant.isNotEmpty
-                                ? _loadUserInfo(otherParticipant)
+                                ? _getUserInfoFuture(otherParticipant)
                                 : Future.value(null),
                             builder: (context, snapshot) {
                               final userInfo = snapshot.data;
@@ -177,25 +185,16 @@ class _ChatsScreenState extends State<ChatsScreen> {
                               final currentUnreadCount = chatProvider.getUnreadCount(chat.id);
                               
                               return ListTile(
-                                    leading: CircleAvatar(
+                                    leading: AdaptiveAvatar(
+                                      photoUrl: chat.isGroup ? chat.groupPhotoUrl : photoUrl,
+                                      radius: 20,
                                       backgroundColor: Colors.blue,
-                                      backgroundImage: chat.isGroup
-                                          ? (chat.groupPhotoUrl != null && chat.groupPhotoUrl!.isNotEmpty
-                                              ? NetworkImage(ImageUtils.getFullImageUrl(chat.groupPhotoUrl!))
-                                              : null)
-                                          : (photoUrl != null && photoUrl.isNotEmpty
-                                              ? NetworkImage(ImageUtils.getFullImageUrl(photoUrl))
-                                              : null),
-                                      child: chat.isGroup
-                                          ? (chat.groupPhotoUrl == null || chat.groupPhotoUrl!.isEmpty
-                                              ? const Icon(Icons.group, color: Colors.white)
-                                              : null)
-                                          : (photoUrl == null || photoUrl.isEmpty
-                                              ? Text(
-                                                  displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
-                                                  style: const TextStyle(color: Colors.white),
-                                                )
-                                              : null),
+                                      fallbackChild: chat.isGroup
+                                          ? const Icon(Icons.group, color: Colors.white)
+                                          : Text(
+                                              displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+                                              style: const TextStyle(color: Colors.white),
+                                            ),
                                     ),
                                     title: Text(displayName),
                                     subtitle: Text(

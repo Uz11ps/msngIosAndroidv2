@@ -4,7 +4,7 @@ import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
 import '../models/user.dart';
-import '../utils/image_utils.dart';
+import '../widgets/adaptive_avatar.dart';
 import 'chat_screen.dart';
 
 class CreateChatScreen extends StatefulWidget {
@@ -177,17 +177,14 @@ class _CreateChatScreenState extends State<CreateChatScreen> {
                   final isExisting = widget.existingParticipants?.contains(user.id) ?? false;
                   
                   return ListTile(
-                    leading: CircleAvatar(
+                    leading: AdaptiveAvatar(
+                      photoUrl: user.photoUrl,
+                      radius: 20,
                       backgroundColor: Colors.blue,
-                      backgroundImage: user.photoUrl != null
-                          ? NetworkImage(ImageUtils.getFullImageUrl(user.photoUrl))
-                          : null,
-                      child: user.photoUrl == null
-                          ? Text(
-                              user.displayName?[0].toUpperCase() ?? 'U',
-                              style: const TextStyle(color: Colors.white),
-                            )
-                          : null,
+                      fallbackChild: Text(
+                        user.displayName?[0].toUpperCase() ?? 'U',
+                        style: const TextStyle(color: Colors.white),
+                      ),
                     ),
                     title: Text(user.displayName ?? 'Без имени'),
                     subtitle: Text(user.email ?? user.phoneNumber ?? ''),

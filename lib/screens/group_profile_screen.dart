@@ -6,7 +6,7 @@ import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
-import '../utils/image_utils.dart';
+import '../widgets/adaptive_avatar.dart';
 import 'create_chat_screen.dart';
 
 class GroupProfileScreen extends StatefulWidget {
@@ -265,15 +265,11 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                     onTap: _isAdmin ? _updateGroupPhoto : null,
                     child: Stack(
                       children: [
-                        CircleAvatar(
+                        AdaptiveAvatar(
+                          photoUrl: _groupPhotoUrl,
                           radius: 50,
                           backgroundColor: Colors.blue,
-                          backgroundImage: _groupPhotoUrl != null && _groupPhotoUrl!.isNotEmpty
-                              ? NetworkImage(ImageUtils.getFullImageUrl(_groupPhotoUrl!))
-                              : null,
-                          child: _groupPhotoUrl == null || _groupPhotoUrl!.isEmpty
-                              ? const Icon(Icons.group, size: 50, color: Colors.white)
-                              : null,
+                          fallbackChild: const Icon(Icons.group, size: 50, color: Colors.white),
                         ),
                         if (_isAdmin)
                           Positioned(
@@ -341,17 +337,14 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                       ..._participants.map((user) {
                         final isAdmin = user.id == widget.chat.groupAdminId;
                         return ListTile(
-                          leading: CircleAvatar(
+                          leading: AdaptiveAvatar(
+                            photoUrl: user.photoUrl,
+                            radius: 20,
                             backgroundColor: Colors.blue,
-                            backgroundImage: user.photoUrl != null && user.photoUrl!.isNotEmpty
-                                ? NetworkImage(ImageUtils.getFullImageUrl(user.photoUrl!))
-                                : null,
-                            child: user.photoUrl == null || user.photoUrl!.isEmpty
-                                ? Text(
-                                    (user.displayName?[0] ?? 'U').toUpperCase(),
-                                    style: const TextStyle(color: Colors.white),
-                                  )
-                                : null,
+                            fallbackChild: Text(
+                              (user.displayName?[0] ?? 'U').toUpperCase(),
+                              style: const TextStyle(color: Colors.white),
+                            ),
                           ),
                           title: Text(user.displayName ?? user.email ?? user.phoneNumber ?? 'Пользователь'),
                           subtitle: isAdmin ? const Text('Создатель группы') : null,

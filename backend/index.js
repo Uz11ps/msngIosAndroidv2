@@ -29,8 +29,93 @@ if (!fs.existsSync(uploadDir)){
 const TELEGRAM_GATEWAY_TOKEN = 'AAEqMQAAxLHukRbH3x_aYspgyiVgIhQhQZBU4_86f_RvOg';
 
 app.use(cors());
-app.use(express.json());
+// Increase JSON body limit so we can accept base64 uploads as a fallback when
+// multipart uploads hang/timeout on some iOS network paths.
+app.use(express.json({ limit: '25mb' }));
 app.use('/uploads', express.static('uploads'));
+
+// Some networks/proxies block or hang on direct static `/uploads/*` requests.
+// Provide an API-shaped media endpoint so clients can fetch media through `/api/*`,
+// which tends to be treated differently by DPI/carrier proxies.
+app.get('/api/media/:filename', (req, res) => {
+  try {
+    const filename = path.basename(String(req.params.filename || ''));
+    if (!filename) return res.status(400).json({ error: 'filename required' });
+    const filePath = path.join(uploadDir, filename);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'not found' });
+    return res.sendFile(path.resolve(filePath));
+  } catch (e) {
+    console.error('api media error', e);
+    return res.status(500).json({ error: 'media error' });
+  }
+});
+
+// JSON chunked media download: avoids binary responses that some networks/proxies block/hang on.
+// Public (same as /uploads). Client calls with { filename, offset, length }.
+// NOTE: Cloudflare sometimes returns 520 for POST requests to certain API paths.
+// Provide a GET variant on a different path to avoid POST body handling issues at the edge.
+function _handleMediaChunk(filenameRaw, offsetRaw, lengthRaw, res) {
+  const filename = path.basename(String(filenameRaw || ''));
+  const offset = Number(offsetRaw || 0);
+  const length = Number(lengthRaw || 24000);
+  if (!filename) return res.status(400).json({ error: 'filename required' });
+  if (!Number.isFinite(offset) || offset < 0) return res.status(400).json({ error: 'bad offset' });
+  if (!Number.isFinite(length) || length <= 0 || length > 65536) return res.status(400).json({ error: 'bad length' });
+
+  const filePath = path.join(uploadDir, filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'not found' });
+
+  const stat = fs.statSync(filePath);
+  const size = stat.size || 0;
+  if (offset >= size) {
+    return res.json({ eof: true, offset, size, dataBase64: '' });
+  }
+
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const toRead = Math.min(length, size - offset);
+    const buf = Buffer.alloc(toRead);
+    const read = fs.readSync(fd, buf, 0, toRead, offset);
+    const slice = read === toRead ? buf : buf.subarray(0, read);
+    return res.json({
+      eof: offset + read >= size,
+      offset,
+      nextOffset: offset + read,
+      size,
+      dataBase64: slice.toString('base64'),
+    });
+  } finally {
+    try { fs.closeSync(fd); } catch (_) {}
+  }
+}
+
+app.get('/api/media_chunk', (req, res) => {
+  try {
+    return _handleMediaChunk(req.query && req.query.filename, req.query && req.query.offset, req.query && req.query.length, res);
+  } catch (e) {
+    console.error('api media chunk error', e);
+    return res.status(500).json({ error: 'media chunk error' });
+  }
+});
+
+// Backwards compatible aliases (older clients used this path).
+app.get('/api/media/chunk', (req, res) => {
+  try {
+    return _handleMediaChunk(req.query && req.query.filename, req.query && req.query.offset, req.query && req.query.length, res);
+  } catch (e) {
+    console.error('api media chunk alias(get) error', e);
+    return res.status(500).json({ error: 'media chunk error' });
+  }
+});
+
+app.post('/api/media/chunk', (req, res) => {
+  try {
+    return _handleMediaChunk(req.body && req.body.filename, req.body && req.body.offset, req.body && req.body.length, res);
+  } catch (e) {
+    console.error('api media chunk alias(post) error', e);
+    return res.status(500).json({ error: 'media chunk error' });
+  }
+});
 
 const storage = multer.diskStorage({
   destination: 'uploads/',
@@ -78,6 +163,33 @@ let db;
       timestamp INTEGER,
       isRead INTEGER DEFAULT 0,
       replyToMessageId TEXT
+    );
+    CREATE TABLE IF NOT EXISTS blocked_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      blocker_id TEXT NOT NULL,
+      blocked_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(blocker_id, blocked_id)
+    );
+    CREATE TABLE IF NOT EXISTS user_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reporter_id TEXT NOT NULL,
+      reported_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      details TEXT,
+      created_at INTEGER NOT NULL,
+      status TEXT DEFAULT 'pending'
+    );
+    CREATE TABLE IF NOT EXISTS message_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reporter_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      details TEXT,
+      created_at INTEGER NOT NULL,
+      status TEXT DEFAULT 'pending'
     );
   `);
 
@@ -135,13 +247,45 @@ app.post('/api/auth/email-login', async (req, res) => {
       });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    // Backward compatibility: older builds could store plain-text password.
+    // If legacy format is detected, allow login and transparently migrate to bcrypt.
+    const hashPrefix = String(user.password).slice(0, 4);
+    const looksHashed = hashPrefix === '$2a$' || hashPrefix === '$2b$' || hashPrefix === '$2y$';
+    let isMatch = false;
+    let shouldUpgradePasswordHash = false;
+    if (looksHashed) {
+      isMatch = await bcrypt.compare(password, user.password);
+    } else {
+      isMatch = String(password) === String(user.password);
+      shouldUpgradePasswordHash = isMatch;
+    }
+
     if (!isMatch) {
       return res.status(400).json({ success: false, message: 'Неверный пароль. Проверьте правильность ввода.' });
     }
 
+    if (shouldUpgradePasswordHash) {
+      try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        await db.run('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, user.id]);
+        user.password = hashedPassword;
+      } catch (upgradeError) {
+        console.error('[WARN] Failed to upgrade legacy password hash:', upgradeError.message);
+      }
+    }
+
     const token = jwt.sign({ id: user.id }, JWT_SECRET);
-    res.json({ success: true, token, user });
+    const safeUser = {
+      id: user.id,
+      phoneNumber: user.phoneNumber,
+      email: user.email,
+      displayName: user.displayName,
+      photoUrl: user.photoUrl,
+      status: user.status,
+      lastSeen: user.lastSeen,
+      fcmToken: user.fcmToken,
+    };
+    res.json({ success: true, token, user: safeUser });
   } catch (e) {
     console.error(`[ERROR] Login error: ${e.message}`);
     res.status(500).json({ success: false, message: 'Ошибка сервера. Попробуйте позже.' });
@@ -779,6 +923,104 @@ app.get('/api/users/search', async (req, res) => {
 });
 
 // Получение пользователя по ID
+// Block user endpoint
+app.post('/api/users/block', authMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const blockerId = req.user.id;
+
+    if (!userId || userId === blockerId) {
+      return res.status(400).json({ success: false, message: 'Неверный запрос' });
+    }
+
+    // Check if already blocked
+    const existing = await db.get(
+      'SELECT * FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?',
+      [blockerId, userId]
+    );
+
+    if (existing) {
+      return res.json({ success: true, message: 'Пользователь уже заблокирован' });
+    }
+
+    // Insert block record
+    await db.run(
+      'INSERT INTO blocked_users (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)',
+      [blockerId, userId, Date.now()]
+    );
+
+    // Notify admin about the block (for moderation purposes)
+    console.log(`[MODERATION] User ${blockerId} blocked user ${userId}`);
+
+    res.json({ success: true, message: 'Пользователь заблокирован' });
+  } catch (e) {
+    console.error(`[ERROR] Block user error: ${e.message}`);
+    res.status(500).json({ success: false, message: 'Ошибка блокировки пользователя' });
+  }
+});
+
+// Report user endpoint
+app.post('/api/users/report', authMiddleware, async (req, res) => {
+  try {
+    const { userId, reason, details } = req.body;
+    const reporterId = req.user.id;
+
+    if (!userId || !reason) {
+      return res.status(400).json({ success: false, message: 'Неверный запрос' });
+    }
+
+    // Insert report record
+    await db.run(
+      'INSERT INTO user_reports (reporter_id, reported_id, reason, details, created_at, status) VALUES (?, ?, ?, ?, ?, ?)',
+      [reporterId, userId, reason, details || null, Date.now(), 'pending']
+    );
+
+    console.log(`[MODERATION] User ${reporterId} reported user ${userId} for: ${reason}`);
+
+    // Admin should review reports within 24 hours (as per Apple requirements)
+    // In production, you might want to send an email/notification to admins here
+
+    res.json({ success: true, message: 'Жалоба отправлена. Администрация рассмотрит её в течение 24 часов.' });
+  } catch (e) {
+    console.error(`[ERROR] Report user error: ${e.message}`);
+    res.status(500).json({ success: false, message: 'Ошибка отправки жалобы' });
+  }
+});
+
+// Report message endpoint
+app.post('/api/messages/report', authMiddleware, async (req, res) => {
+  try {
+    const { messageId, chatId, reason, details } = req.body;
+    const reporterId = req.user.id;
+
+    if (!messageId || !chatId || !reason) {
+      return res.status(400).json({ success: false, message: 'Неверный запрос' });
+    }
+
+    // Get message to find sender
+    const message = await db.get('SELECT * FROM messages WHERE id = ?', [messageId]);
+    if (!message) {
+      return res.status(404).json({ success: false, message: 'Сообщение не найдено' });
+    }
+
+    // Insert report record
+    await db.run(
+      'INSERT INTO message_reports (reporter_id, message_id, chat_id, sender_id, reason, details, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [reporterId, messageId, chatId, message.sender_id, reason, details || null, Date.now(), 'pending']
+    );
+
+    console.log(`[MODERATION] User ${reporterId} reported message ${messageId} from user ${message.sender_id} for: ${reason}`);
+
+    // Admin should review and remove objectionable content within 24 hours
+    // In production, you might want to send an email/notification to admins here
+
+    res.json({ success: true, message: 'Жалоба отправлена. Администрация рассмотрит её в течение 24 часов.' });
+  } catch (e) {
+    console.error(`[ERROR] Report message error: ${e.message}`);
+    res.status(500).json({ success: false, message: 'Ошибка отправки жалобы' });
+  }
+});
+
 app.get('/api/users/:userId', authMiddleware, async (req, res) => {
   try {
     const user = await db.get('SELECT id, phoneNumber, email, displayName, photoUrl, status FROM users WHERE id = ?', [req.params.userId]);
@@ -825,7 +1067,112 @@ app.post('/api/chats/create', async (req, res) => {
 });
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
-  res.json({ url: `/uploads/${req.file.filename}` });
+  // Prefer API media endpoint for better compatibility on carrier networks.
+  res.json({ url: `/api/media/${req.file.filename}` });
+});
+
+// Fallback upload endpoint: JSON + base64 payload.
+// This helps on paths where multipart/form-data POSTs hang/timeout.
+app.post('/api/upload-base64', authMiddleware, (req, res) => {
+  try {
+    const { filename, dataBase64 } = req.body || {};
+    if (!dataBase64 || typeof dataBase64 !== 'string') {
+      return res.status(400).json({ error: 'dataBase64 is required' });
+    }
+
+    // Allow both raw base64 and data URLs.
+    const base64 = dataBase64.includes('base64,')
+      ? dataBase64.split('base64,').pop()
+      : dataBase64;
+
+    const buf = Buffer.from(base64, 'base64');
+    if (!buf || !buf.length) {
+      return res.status(400).json({ error: 'invalid base64' });
+    }
+
+    const safeExt = filename ? path.extname(filename).slice(0, 10) : '';
+    const outName = `${Date.now()}${safeExt}`;
+    const outPath = path.join(uploadDir, outName);
+    fs.writeFileSync(outPath, buf);
+    return res.json({ url: `/api/media/${outName}` });
+  } catch (e) {
+    console.error('upload-base64 error', e);
+    return res.status(500).json({ error: 'upload failed' });
+  }
+});
+
+// Chunked base64 upload fallback: send small JSON requests to avoid carrier/edge issues with large POST bodies.
+// Flow:
+//   1) POST /api/upload-chunks/init { filename }
+//   2) POST /api/upload-chunks/part { uploadId, index, dataBase64 }
+//   3) POST /api/upload-chunks/complete { uploadId }
+const activeUploads = new Map(); // uploadId -> { tmpPath, createdAt, filename }
+
+app.post('/api/upload-chunks/init', authMiddleware, (req, res) => {
+  try {
+    const { filename } = req.body || {};
+    const safeExt = filename ? path.extname(String(filename)).slice(0, 10) : '';
+    const uploadId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const tmpName = `${uploadId}${safeExt}.part`;
+    const tmpPath = path.join(uploadDir, tmpName);
+    fs.writeFileSync(tmpPath, Buffer.alloc(0));
+    activeUploads.set(uploadId, { tmpPath, createdAt: Date.now(), filename: filename || '' });
+    return res.json({ uploadId });
+  } catch (e) {
+    console.error('upload-chunks init error', e);
+    return res.status(500).json({ error: 'init failed' });
+  }
+});
+
+app.post('/api/upload-chunks/part', authMiddleware, (req, res) => {
+  try {
+    const { uploadId, index, dataBase64 } = req.body || {};
+    if (!uploadId || typeof uploadId !== 'string') {
+      return res.status(400).json({ error: 'uploadId is required' });
+    }
+    if (dataBase64 == null || typeof dataBase64 !== 'string') {
+      return res.status(400).json({ error: 'dataBase64 is required' });
+    }
+    const meta = activeUploads.get(uploadId);
+    if (!meta) {
+      return res.status(404).json({ error: 'unknown uploadId' });
+    }
+    const base64 = dataBase64.includes('base64,')
+      ? dataBase64.split('base64,').pop()
+      : dataBase64;
+    const buf = Buffer.from(base64, 'base64');
+    if (!buf || !buf.length) {
+      return res.status(400).json({ error: 'invalid base64 chunk' });
+    }
+    // Append chunk. Index is accepted for diagnostics only.
+    fs.appendFileSync(meta.tmpPath, buf);
+    return res.json({ ok: true, index: index ?? null, bytesAppended: buf.length });
+  } catch (e) {
+    console.error('upload-chunks part error', e);
+    return res.status(500).json({ error: 'part failed' });
+  }
+});
+
+app.post('/api/upload-chunks/complete', authMiddleware, (req, res) => {
+  try {
+    const { uploadId } = req.body || {};
+    if (!uploadId || typeof uploadId !== 'string') {
+      return res.status(400).json({ error: 'uploadId is required' });
+    }
+    const meta = activeUploads.get(uploadId);
+    if (!meta) {
+      return res.status(404).json({ error: 'unknown uploadId' });
+    }
+    activeUploads.delete(uploadId);
+    const safeExt = meta.filename ? path.extname(String(meta.filename)).slice(0, 10) : '';
+    const outName = `${Date.now()}${safeExt}`;
+    const outPath = path.join(uploadDir, outName);
+    fs.renameSync(meta.tmpPath, outPath);
+    return res.json({ url: `/api/media/${outName}` });
+  } catch (e) {
+    console.error('upload-chunks complete error', e);
+    return res.status(500).json({ error: 'complete failed' });
+  }
 });
 
 // Получение списка чатов пользователя
@@ -857,13 +1204,33 @@ app.get('/api/chats', authMiddleware, async (req, res) => {
   }
 });
 
+// Helper function to check if user is blocked
+async function isUserBlocked(viewerId, otherUserId) {
+  const block = await db.get(
+    'SELECT * FROM blocked_users WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+    [viewerId, otherUserId, otherUserId, viewerId]
+  );
+  return !!block;
+}
+
 app.get('/api/chats/:chatId/messages', authMiddleware, async (req, res) => {
   try {
+    const viewerId = req.user.id;
     const messages = await db.all(
       'SELECT * FROM messages WHERE chatId = ? ORDER BY timestamp DESC LIMIT 100',
       [req.params.chatId]
     );
-    res.json(messages);
+    
+    // Filter out messages from blocked users
+    const filteredMessages = [];
+    for (const message of messages) {
+      const blocked = await isUserBlocked(viewerId, message.senderId);
+      if (!blocked) {
+        filteredMessages.push(message);
+      }
+    }
+    
+    res.json(filteredMessages);
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -945,6 +1312,24 @@ io.on('connection', (socket) => {
     };
 
     try {
+      // Get chat participants to check for blocks
+      const chat = await db.get('SELECT * FROM chats WHERE id = ?', [chatId]);
+      if (chat) {
+        const participants = JSON.parse(chat.participants);
+        
+        // Check if sender is blocked by any participant
+        for (const participantId of participants) {
+          if (participantId !== socket.userId) {
+            const blocked = await isUserBlocked(participantId, socket.userId);
+            if (blocked) {
+              console.log(`[MODERATION] Message blocked: user ${socket.userId} is blocked by ${participantId}`);
+              socket.emit('message_blocked', { reason: 'Вы заблокированы этим пользователем' });
+              return;
+            }
+          }
+        }
+      }
+
       await db.run(
         'INSERT INTO messages (id, chatId, senderId, text, type, mediaUrl, timestamp, replyToMessageId) VALUES (?,?,?,?,?,?,?,?)',
         [message.id, message.chatId, message.senderId, message.text, message.type, message.mediaUrl, message.timestamp, message.replyToMessageId]
@@ -956,7 +1341,27 @@ io.on('connection', (socket) => {
       );
 
       console.log(`[DEBUG] Message saved and chat updated: ${chatId}`);
-      io.to(chatId).emit('new_message', message);
+      
+      // Only emit to participants who haven't blocked the sender
+      const chatUpdated = await db.get('SELECT * FROM chats WHERE id = ?', [chatId]);
+      if (chatUpdated) {
+        const participants = JSON.parse(chatUpdated.participants);
+        for (const participantId of participants) {
+          if (participantId !== socket.userId) {
+            const blocked = await isUserBlocked(participantId, socket.userId);
+            if (!blocked) {
+              const targetSocketId = userSockets.get(String(participantId));
+              if (targetSocketId) {
+                io.to(targetSocketId).emit('new_message', message);
+              }
+            }
+          }
+        }
+        // Also emit to sender
+        socket.emit('new_message', message);
+      } else {
+        io.to(chatId).emit('new_message', message);
+      }
     } catch (e) {
       console.error(`[ERROR] Send message error: ${e.message}`);
     }
