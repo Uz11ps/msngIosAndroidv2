@@ -1,10 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+const String kCurrentTermsVersion = '20 марта 2026';
+
 class EulaScreen extends StatefulWidget {
   final VoidCallback onAccept;
+  final String termsVersion;
+  final bool requireAcceptance;
+  final bool canDismiss;
 
-  const EulaScreen({super.key, required this.onAccept});
+  const EulaScreen({
+    super.key,
+    required this.onAccept,
+    required this.termsVersion,
+    this.requireAcceptance = true,
+    this.canDismiss = false,
+  });
 
   @override
   State<EulaScreen> createState() => _EulaScreenState();
@@ -41,11 +52,12 @@ class _EulaScreenState extends State<EulaScreen> {
   }
 
   Future<void> _acceptEula() async {
-    if (!_accepted) return;
+    if (widget.requireAcceptance && !_accepted) return;
     
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('eula_accepted', true);
     await prefs.setString('eula_accepted_date', DateTime.now().toIso8601String());
+    await prefs.setString('eula_accepted_version', widget.termsVersion);
     
     widget.onAccept();
   }
@@ -55,7 +67,7 @@ class _EulaScreenState extends State<EulaScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Условия использования'),
-        automaticallyImplyLeading: false,
+        automaticallyImplyLeading: widget.canDismiss,
       ),
       body: Column(
         children: [
@@ -75,8 +87,16 @@ class _EulaScreenState extends State<EulaScreen> {
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    'Последнее обновление: 4 марта 2026 г.',
+                    'Последнее обновление:',
                     style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                  Text(
+                    widget.termsVersion,
+                    style: const TextStyle(
                       fontSize: 12,
                       color: Colors.grey,
                       fontStyle: FontStyle.italic,
@@ -253,31 +273,36 @@ class _EulaScreenState extends State<EulaScreen> {
             ),
             child: Column(
               children: [
-                CheckboxListTile(
-                  title: const Text(
-                    'Я прочитал и согласен с условиями использования',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                if (widget.requireAcceptance)
+                  CheckboxListTile(
+                    title: const Text(
+                      'Я прочитал и согласен с условиями использования',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    value: _accepted,
+                    onChanged: (value) {
+                      setState(() {
+                        _accepted = value ?? false;
+                      });
+                    },
+                    controlAffinity: ListTileControlAffinity.leading,
                   ),
-                  value: _accepted,
-                  onChanged: (value) {
-                    setState(() {
-                      _accepted = value ?? false;
-                    });
-                  },
-                  controlAffinity: ListTileControlAffinity.leading,
-                ),
-                const SizedBox(height: 8),
+                if (widget.requireAcceptance) const SizedBox(height: 8),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: (_accepted && _hasScrolledToBottom) ? _acceptEula : null,
+                    onPressed: widget.requireAcceptance
+                        ? ((_accepted && _hasScrolledToBottom) ? _acceptEula : null)
+                        : () => Navigator.of(context).maybePop(),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
-                    child: const Text('Принять и продолжить'),
+                    child: Text(
+                      widget.requireAcceptance ? 'Принять и продолжить' : 'Закрыть',
+                    ),
                   ),
                 ),
-                if (!_hasScrolledToBottom)
+                if (widget.requireAcceptance && !_hasScrolledToBottom)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(

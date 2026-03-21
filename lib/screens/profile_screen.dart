@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:io';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../widgets/adaptive_avatar.dart';
 import 'login_screen.dart';
 import 'link_phone_screen.dart';
+import 'eula_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -170,6 +170,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             child: const Text('Привязать'),
                           )
                         : null,
+                  ),
+                ),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.description),
+                    title: const Text('Условия использования'),
+                    subtitle: const Text('Просмотр правил и политики модерации'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => EulaScreen(
+                            onAccept: () {},
+                            termsVersion: kCurrentTermsVersion,
+                            requireAcceptance: false,
+                            canDismiss: true,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(height: 24),

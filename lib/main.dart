@@ -152,9 +152,11 @@ class _AuthWrapperState extends State<AuthWrapper> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final accepted = prefs.getBool('eula_accepted') ?? false;
+      final acceptedVersion = prefs.getString('eula_accepted_version');
+      final isLatestAccepted = accepted && acceptedVersion == kCurrentTermsVersion;
       if (mounted) {
         setState(() {
-          _eulaAccepted = accepted;
+          _eulaAccepted = isLatestAccepted;
           _checkingEula = false;
         });
       }
@@ -186,7 +188,10 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
     // Если EULA не принят, показываем экран EULA
     if (!_eulaAccepted) {
-      return EulaScreen(onAccept: _onEulaAccepted);
+      return EulaScreen(
+        onAccept: _onEulaAccepted,
+        termsVersion: kCurrentTermsVersion,
+      );
     }
 
     final authProvider = context.watch<AuthProvider>();

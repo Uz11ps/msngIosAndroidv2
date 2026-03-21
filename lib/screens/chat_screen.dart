@@ -573,6 +573,7 @@ class _ChatScreenState extends State<ChatScreen> {
     
     String? selectedReason;
     final detailsController = TextEditingController();
+    bool blockSender = false;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -614,6 +615,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   maxLines: 3,
                 ),
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  value: blockSender,
+                  onChanged: (value) => setState(() => blockSender = value ?? false),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('Заблокировать автора сообщения'),
+                  subtitle: const Text('Скрыть будущие сообщения этого пользователя'),
+                  contentPadding: EdgeInsets.zero,
+                ),
               ],
             ),
           ),
@@ -652,6 +662,11 @@ class _ChatScreenState extends State<ChatScreen> {
       details: detailsController.text.trim().isEmpty ? null : detailsController.text.trim(),
     );
     
+    if (result['success'] == true && blockSender && message.senderId.isNotEmpty) {
+      await apiService.blockUser(message.senderId);
+      await context.read<ChatProvider>().loadMessages(widget.chatId);
+    }
+    
     detailsController.dispose();
 
     if (mounted) {
@@ -675,113 +690,48 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     
     try {
-      // Запрашиваем разрешение на доступ к галерее
-      if (!kIsWeb) {
-<<<<<<< HEAD
+      bool photoGranted = false;
+      bool permanentlyDenied = false;
+
+      if (Platform.isIOS) {
+        print('📷 Requesting photo library permission via native method...');
+        photoGranted = await _requestPermissionNative('requestPhotoLibraryPermission');
+        print('📷 Native photo library permission result: $photoGranted');
+      } else {
         var photosStatus = await Permission.photos.status;
-        print('📷 Photos permission status: $photosStatus');
-        
-        // На iOS всегда запрашиваем разрешение явно
-        // Это важно для эмулятора и устройств, где разрешение может быть не определено
-        print('📷 Requesting photos permission...');
-        photosStatus = await Permission.photos.request();
-        print('📷 Photos permission after request: $photosStatus');
-        
-        // Проверяем статус еще раз после запроса
-        photosStatus = await Permission.photos.status;
-        print('📷 Photos permission final status: $photosStatus');
-        
-        // Если разрешение на фото не предоставлено, пробуем запросить разрешение на медиа
-        if (!photosStatus.isGranted) {
-          print('📷 Trying mediaLibrary permission...');
-          var mediaStatus = await Permission.mediaLibrary.status;
-          print('📷 MediaLibrary permission status: $mediaStatus');
-          
-          print('📷 Requesting mediaLibrary permission...');
-          mediaStatus = await Permission.mediaLibrary.request();
-          print('📷 MediaLibrary permission after request: $mediaStatus');
-          
-          // Проверяем статус еще раз после запроса
-          mediaStatus = await Permission.mediaLibrary.status;
-          print('📷 MediaLibrary permission final status: $mediaStatus');
-          
-          if (!mediaStatus.isGranted) {
-            print('❌ Photos/media permission not granted: $mediaStatus');
-            if (mounted) {
-              final message = mediaStatus.isPermanentlyDenied
-                  ? 'Разрешение на доступ к галерее было отклонено. Пожалуйста, включите его в настройках приложения.'
-                  : 'Необходимо разрешение на доступ к галерее';
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(message),
-                  action: SnackBarAction(
-                    label: 'Настройки',
-                    onPressed: () => openAppSettings(),
-                  ),
-                  duration: const Duration(seconds: 7),
-                ),
-              );
-=======
-        bool photoGranted = false;
-        if (Platform.isIOS) {
-          print('📷 Requesting photo library permission via native method...');
-          photoGranted = await _requestPermissionNative('requestPhotoLibraryPermission');
-          print('📷 Native photo library permission result: $photoGranted');
+        if (photosStatus.isDenied) {
+          photosStatus = await Permission.photos.request();
+        }
+        if (photosStatus.isGranted) {
+          photoGranted = true;
         } else {
-          // На Android используем permission_handler
-          var photosStatus = await Permission.photos.status;
-          if (!photosStatus.isGranted) {
-            if (photosStatus.isDenied) {
-              photosStatus = await Permission.photos.request();
->>>>>>> b0e9cbf (Fix App Store review issues and stabilize iOS networking/auth flow)
-            }
-            if (!photosStatus.isGranted) {
-              var mediaStatus = await Permission.mediaLibrary.status;
-              if (mediaStatus.isDenied) {
-                mediaStatus = await Permission.mediaLibrary.request();
-              }
-              photoGranted = mediaStatus.isGranted;
-            } else {
-              photoGranted = photosStatus.isGranted;
-            }
-          } else {
-            photoGranted = true;
+          var mediaStatus = await Permission.mediaLibrary.status;
+          if (mediaStatus.isDenied) {
+            mediaStatus = await Permission.mediaLibrary.request();
           }
+          photoGranted = mediaStatus.isGranted;
+          permanentlyDenied =
+              photosStatus.isPermanentlyDenied || mediaStatus.isPermanentlyDenied;
         }
-        
-<<<<<<< HEAD
-        // Если разрешение на фото тоже не предоставлено, показываем сообщение
-        if (!photosStatus.isGranted) {
-          print('❌ Photos permission not granted: $photosStatus');
-          if (mounted) {
-            final message = photosStatus.isPermanentlyDenied
-                ? 'Разрешение на доступ к галерее было отклонено. Пожалуйста, включите его в настройках приложения.'
-                : 'Необходимо разрешение на доступ к галерее';
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(message),
-=======
-        if (!photoGranted) {
-          print('❌ Photos/media permission not granted');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Необходимо разрешение на доступ к галерее'),
->>>>>>> b0e9cbf (Fix App Store review issues and stabilize iOS networking/auth flow)
-                action: SnackBarAction(
-                  label: 'Настройки',
-                  onPressed: () => openAppSettings(),
-                ),
-<<<<<<< HEAD
-                duration: const Duration(seconds: 7),
-=======
-                duration: const Duration(seconds: 5),
->>>>>>> b0e9cbf (Fix App Store review issues and stabilize iOS networking/auth flow)
+      }
+
+      if (!photoGranted) {
+        if (mounted) {
+          final message = permanentlyDenied
+              ? 'Доступ к галерее отклонен. Включите его в настройках приложения.'
+              : 'Необходимо разрешение на доступ к галерее';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(message),
+              action: SnackBarAction(
+                label: 'Настройки',
+                onPressed: () => openAppSettings(),
               ),
-            );
-          }
-          return;
+              duration: const Duration(seconds: 6),
+            ),
+          );
         }
+        return;
       }
       
       final XFile? image = await _picker.pickImage(
@@ -858,6 +808,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!kIsWeb) {
         // На iOS используем нативный метод запроса разрешений
         bool microphoneGranted = false;
+        bool microphonePermanentlyDenied = false;
         if (Platform.isIOS) {
           print('🎤 Requesting microphone permission via native method...');
           microphoneGranted = await _requestPermissionNative('requestMicrophonePermission');
@@ -869,12 +820,13 @@ class _ChatScreenState extends State<ChatScreen> {
             microphoneStatus = await Permission.microphone.request();
           }
           microphoneGranted = microphoneStatus.isGranted;
+          microphonePermanentlyDenied = microphoneStatus.isPermanentlyDenied;
         }
         
         if (!microphoneGranted) {
           print('❌ Microphone permission not granted');
           if (mounted) {
-            final message = microphoneStatus.isPermanentlyDenied
+            final message = microphonePermanentlyDenied
                 ? 'Разрешение на микрофон было отклонено. Пожалуйста, включите его в настройках приложения.'
                 : 'Необходимо разрешение на использование микрофона';
             ScaffoldMessenger.of(context).showSnackBar(
@@ -895,6 +847,7 @@ class _ChatScreenState extends State<ChatScreen> {
         // Для видеозвонка проверяем и запрашиваем разрешение на камеру
         if (isVideo) {
           bool cameraGranted = false;
+          bool cameraPermanentlyDenied = false;
           if (Platform.isIOS) {
             print('📷 Requesting camera permission via native method...');
             cameraGranted = await _requestPermissionNative('requestCameraPermission');
@@ -906,12 +859,13 @@ class _ChatScreenState extends State<ChatScreen> {
               cameraStatus = await Permission.camera.request();
             }
             cameraGranted = cameraStatus.isGranted;
+            cameraPermanentlyDenied = cameraStatus.isPermanentlyDenied;
           }
           
           if (!cameraGranted) {
             print('❌ Camera permission not granted');
             if (mounted) {
-              final message = cameraStatus.isPermanentlyDenied
+              final message = cameraPermanentlyDenied
                   ? 'Разрешение на камеру было отклонено. Пожалуйста, включите его в настройках приложения.'
                   : 'Необходимо разрешение на использование камеры';
               ScaffoldMessenger.of(context).showSnackBar(
@@ -1004,6 +958,7 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       // Запрашиваем разрешение на микрофон
       bool microphoneGranted = false;
+      bool microphonePermanentlyDenied = false;
       if (Platform.isIOS) {
         print('🎤 Requesting microphone permission for recording via native method...');
         microphoneGranted = await _requestPermissionNative('requestMicrophonePermission');
@@ -1015,12 +970,13 @@ class _ChatScreenState extends State<ChatScreen> {
           microphoneStatus = await Permission.microphone.request();
         }
         microphoneGranted = microphoneStatus.isGranted;
+        microphonePermanentlyDenied = microphoneStatus.isPermanentlyDenied;
       }
       
       if (!microphoneGranted) {
         print('❌ Microphone permission not granted for recording');
         if (mounted) {
-          final message = microphoneStatus.isPermanentlyDenied
+          final message = microphonePermanentlyDenied
               ? 'Разрешение на микрофон было отклонено. Пожалуйста, включите его в настройках приложения для записи голосовых сообщений.'
               : 'Необходимо разрешение на использование микрофона для записи голосовых сообщений';
           ScaffoldMessenger.of(context).showSnackBar(

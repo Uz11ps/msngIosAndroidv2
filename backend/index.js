@@ -949,6 +949,19 @@ app.post('/api/users/block', authMiddleware, async (req, res) => {
       [blockerId, userId, Date.now()]
     );
 
+    // Create moderation signal so abuse actions are visible to admins immediately.
+    await db.run(
+      'INSERT INTO user_reports (reporter_id, reported_id, reason, details, created_at, status) VALUES (?, ?, ?, ?, ?, ?)',
+      [
+        blockerId,
+        userId,
+        'Блокировка пользователя',
+        'Автоматически создано после блокировки пользователя из приложения.',
+        Date.now(),
+        'pending',
+      ]
+    );
+
     // Notify admin about the block (for moderation purposes)
     console.log(`[MODERATION] User ${blockerId} blocked user ${userId}`);
 

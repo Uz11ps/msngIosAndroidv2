@@ -1,23 +1,31 @@
 import 'package:flutter/foundation.dart';
 
 class ContentFilter {
-  // Базовый список неприемлемых слов и фраз (можно расширить)
+  // Базовый локальный фильтр.
+  // Полный набор правил должен поддерживаться на сервере модерации.
   static const List<String> _blockedWords = [
-    // Оскорбления (примеры - можно расширить)
-    // 'word1', 'word2', ...
-    // Примечание: В реальном приложении этот список должен быть более полным
-    // и может загружаться с сервера для обновления без обновления приложения
+    'hate',
+    'nazi',
+    'terror',
+    'scam',
+    'fraud',
+    'porn',
+    'суицид',
+    'террор',
+    'насилие',
+    'мошен',
+    'порн',
   ];
 
   // Проверяет, содержит ли текст неприемлемые слова
   static bool containsObjectionableContent(String text) {
     if (text.isEmpty) return false;
     
-    final lowerText = text.toLowerCase();
+    final lowerText = _normalizeForMatch(text);
     
     // Проверка на базовые блокируемые слова
     for (final word in _blockedWords) {
-      if (lowerText.contains(word.toLowerCase())) {
+      if (lowerText.contains(_normalizeForMatch(word))) {
         if (kDebugMode) {
           print('🚫 Content filter: Found blocked word "$word"');
         }
@@ -39,7 +47,7 @@ class ContentFilter {
     
     String filtered = text;
     for (final word in _blockedWords) {
-      final regex = RegExp(word, caseSensitive: false);
+      final regex = RegExp(RegExp.escape(word), caseSensitive: false);
       filtered = filtered.replaceAll(regex, '*' * word.length);
     }
     
@@ -61,7 +69,26 @@ class ContentFilter {
     if (urls.length > 2) {
       return true;
     }
+
+    // Слишком большое количество одинаковых слов подряд.
+    if (RegExp(r'\b(\w+)(\s+\1){4,}\b', caseSensitive: false).hasMatch(text)) {
+      return true;
+    }
     
     return false;
+  }
+
+  static String _normalizeForMatch(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('0', 'o')
+        .replaceAll('1', 'i')
+        .replaceAll('3', 'e')
+        .replaceAll('4', 'a')
+        .replaceAll('5', 's')
+        .replaceAll('7', 't')
+        .replaceAll('_', '')
+        .replaceAll('-', '')
+        .replaceAll(' ', '');
   }
 }
