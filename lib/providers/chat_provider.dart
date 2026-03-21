@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/chat.dart';
 import '../models/message.dart';
@@ -52,12 +51,6 @@ class ChatProvider with ChangeNotifier {
   String? _currentOpenChatId; // ID открытого в данный момент чата
   String? _currentUserId; // ID текущего пользователя
   bool _isLoading = false;
-  bool _isPollingMessages = false;
-  final Map<String, bool> _loadingMessagesByChat = <String, bool>{};
-  final Map<String, int> _lastMessagesLoadMs = <String, int>{};
-  // When Socket.IO can't connect (common on some networks), fall back to periodic HTTP polling.
-  // This keeps chats usable and makes new messages appear without reopening the screen.
-  Timer? _messagesPollTimer;
 
   List<Chat> get chats => _chats;
   bool get isLoading => _isLoading;
@@ -84,45 +77,9 @@ class ChatProvider with ChangeNotifier {
     if (chatId != null) {
       print('📖 Setting current chat to: $chatId (old: $oldChatId)');
       markAsRead(chatId);
-      _startMessagesPollingIfNeeded(chatId);
     } else {
       print('📖 Clearing current chat (old: $oldChatId)');
-      _stopMessagesPolling();
     }
-  }
-
-  void _startMessagesPollingIfNeeded(String chatId) {
-    _stopMessagesPolling();
-    if (_apiService == null) return;
-
-    // Poll only when socket isn't connected.
-    if (_socketService != null && _socketService!.isConnected) return;
-
-    _isPollingMessages = true;
-    // Initial fetch
-    loadMessages(chatId);
-
-    _messagesPollTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
-      // If socket recovered, stop polling.
-      if (_socketService != null && _socketService!.isConnected) {
-        _stopMessagesPolling();
-        return;
-      }
-      if (_currentOpenChatId != chatId) return;
-      await loadMessages(chatId);
-    });
-    print('🛰️ Started HTTP polling for messages (chatId=$chatId)');
-  }
-
-  void _stopMessagesPolling() {
-    if (_messagesPollTimer != null) {
-      _messagesPollTimer!.cancel();
-      _messagesPollTimer = null;
-      if (_isPollingMessages) {
-        print('🛰️ Stopped HTTP polling for messages');
-      }
-    }
-    _isPollingMessages = false;
   }
   
   // Отметить чат как прочитанный
@@ -236,17 +193,6 @@ class ChatProvider with ChangeNotifier {
       print('⚠️ ApiService is null, cannot load messages');
       return;
     }
-    if (_loadingMessagesByChat[chatId] == true) {
-      return;
-    }
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final lastMs = _lastMessagesLoadMs[chatId] ?? 0;
-    // Avoid message refresh storms when socket is unstable and many callbacks fire.
-    if (nowMs - lastMs < 3000) {
-      return;
-    }
-    _loadingMessagesByChat[chatId] = true;
-    _lastMessagesLoadMs[chatId] = nowMs;
     
     try {
       // Убеждаемся что токен установлен перед запросом
@@ -270,29 +216,12 @@ class ChatProvider with ChangeNotifier {
       
       // Создаем Set для быстрой проверки существующих ID
       final existingIds = _messages[chatId]!.map((m) => m.id).toSet();
-
-      // Merge server messages into local list.
-      // Important: when socket is disconnected we do optimistic UI updates, then we only receive
-      // the "real" message via HTTP polling. If we dedup only by id, the optimistic message stays
-      // and the server one gets added => duplicates (looks like "sent twice").
-      for (final serverMsg in sortedMessages) {
-        if (existingIds.contains(serverMsg.id)) continue;
-
-        final optimisticIndex = _messages[chatId]!.indexWhere((local) {
-          if (local.senderId != serverMsg.senderId) return false;
-          if (local.type != serverMsg.type) return false;
-          // Must be close in time (server/client clocks differ slightly).
-          if ((local.timestamp - serverMsg.timestamp).abs() > 15000) return false;
-          // Match by text or mediaUrl depending on message kind.
-          if ((local.text != null || serverMsg.text != null) && local.text == serverMsg.text) return true;
-          if ((local.mediaUrl != null || serverMsg.mediaUrl != null) && local.mediaUrl == serverMsg.mediaUrl) return true;
-          return false;
-        });
-
-        if (optimisticIndex != -1) {
-          _messages[chatId]![optimisticIndex] = serverMsg;
-        } else {
-          _messages[chatId]!.add(serverMsg);
+      
+      // Добавляем только новые сообщения
+      // При загрузке старых сообщений из API не увеличиваем счетчик непрочитанных
+      for (final message in sortedMessages) {
+        if (!existingIds.contains(message.id)) {
+          _messages[chatId]!.add(message);
         }
       }
       
@@ -304,8 +233,6 @@ class ChatProvider with ChangeNotifier {
       notifyListeners();
     } catch (e) {
       print('❌ Error loading messages: $e');
-    } finally {
-      _loadingMessagesByChat[chatId] = false;
     }
   }
 
@@ -355,19 +282,19 @@ class ChatProvider with ChangeNotifier {
       _messages[message.chatId] = [];
     }
     
-    // Проверяем, нет ли уже такого сообщения (чтобы избежать дубликатов).
-    // Сравниваем по ID или по комбинации chatId + timestamp + senderId + (text/mediaUrl).
+    // Проверяем, нет ли уже такого сообщения (чтобы избежать дубликатов)
+    // Сравниваем по ID или по комбинации chatId + timestamp + senderId + text
     final existingIndex = _messages[message.chatId]!.indexWhere((m) {
       // Если ID совпадает - это точно то же сообщение
       if (m.id == message.id) return true;
-      if (m.senderId != message.senderId) return false;
-      if (m.chatId != message.chatId) return false;
-      if (m.type != message.type) return false;
-      // Check close timestamp (optimistic vs server timestamps).
-      if ((m.timestamp - message.timestamp).abs() >= 15000) return false;
-      // Match by actual payload. For media messages text is often null; match by mediaUrl instead.
-      if ((m.text != null || message.text != null) && m.text == message.text) return true;
-      if ((m.mediaUrl != null || message.mediaUrl != null) && m.mediaUrl == message.mediaUrl) return true;
+      // Если временное сообщение (оптимистичное) и пришло с сервера с тем же текстом и временем
+      // Проверяем по senderId, text и близкому timestamp (в пределах 10 секунд)
+      if (m.senderId == message.senderId && 
+          m.text == message.text && 
+          m.chatId == message.chatId &&
+          (m.timestamp - message.timestamp).abs() < 10000) {
+        return true;
+      }
       return false;
     });
     

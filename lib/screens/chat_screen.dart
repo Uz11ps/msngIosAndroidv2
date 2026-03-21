@@ -3,22 +3,16 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
-import 'dart:io' show Platform;
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../services/auth_service.dart';
 import '../services/audio_service.dart';
 import '../services/agora_service.dart';
-import '../services/media_fetcher.dart';
 import '../utils/image_utils.dart';
-import '../utils/content_filter.dart';
-import '../widgets/adaptive_avatar.dart';
 import '../models/chat.dart';
 import '../models/user.dart';
-import '../models/message.dart';
 import 'user_profile_screen.dart';
 import 'group_profile_screen.dart';
 import 'call_screen.dart';
@@ -51,29 +45,11 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _playingMessageId;
   Map<String, bool> _playingStates = {};
   ChatProvider? _chatProvider;
-  
-  static const MethodChannel _permissionChannel = MethodChannel('com.vvedenskii.messenger/permissions');
-  
-  // Вспомогательная функция для запроса разрешений через нативный метод на iOS
-  Future<bool> _requestPermissionNative(String permissionType) async {
-    if (kIsWeb || !Platform.isIOS) {
-      return false;
-    }
-    
-    try {
-      final result = await _permissionChannel.invokeMethod<bool>(permissionType);
-      return result ?? false;
-    } catch (e) {
-      print('❌ Error requesting permission via native method: $e');
-      return false;
-    }
-  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
       final authProvider = context.read<AuthProvider>();
       final chatProvider = context.read<ChatProvider>();
       _chatProvider = chatProvider; // Сохраняем ссылку для dispose
@@ -104,18 +80,15 @@ class _ChatScreenState extends State<ChatScreen> {
       _setupCallListeners();
       
       await _loadChatInfo();
-      if (!mounted) return;
       
       // Загружаем сообщения и ждем завершения
       await chatProvider.loadMessages(widget.chatId);
-      if (!mounted) return;
       
       // Настраиваем слушатели Socket
       chatProvider.setupSocketListeners();
       
       // Ждем немного перед присоединением к чату, чтобы Socket успел подключиться
       await Future.delayed(const Duration(milliseconds: 500));
-      if (!mounted) return;
       _joinChat();
       
       // Прокручиваем вниз после загрузки сообщений
@@ -437,7 +410,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _joinChat() {
-    if (!mounted) return;
     final chatProvider = context.read<ChatProvider>();
     final socketService = chatProvider.socketService;
     
@@ -505,31 +477,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
-    // Фильтрация контента перед отправкой
-    if (ContentFilter.containsObjectionableContent(text)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Сообщение содержит неприемлемый контент и не может быть отправлено'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      return;
-    }
-
-    if (ContentFilter.isSpam(text)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Сообщение похоже на спам и не может быть отправлено'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-      return;
-    }
-
     print('📤 Sending message: $text to chat: ${widget.chatId}');
     
     try {
@@ -544,8 +491,26 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
       
-      // Don't block on Socket.IO connection; ChatProvider does optimistic UI,
-      // and SocketService has a polling fallback when socket isn't connected.
+      // Проверяем подключение Socket перед отправкой
+      final socketService = authProvider.socketService;
+      if (!socketService.isConnected) {
+        print('⚠️ Socket not connected, waiting before sending message...');
+        socketService.waitForConnection(() {
+          if (mounted) {
+            context.read<ChatProvider>().sendMessage(
+              chatId: widget.chatId,
+              text: text,
+              type: 'text',
+              currentUserId: currentUserId,
+            );
+            _messageController.clear();
+            _scrollToBottom();
+          }
+        });
+        return;
+      }
+      
+      print('✅ Socket is connected, sending message');
       context.read<ChatProvider>().sendMessage(
             chatId: widget.chatId,
             text: text,
@@ -567,118 +532,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _showMessageMenu(BuildContext context, Message message) async {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final apiService = authProvider.apiService;
-    
-    String? selectedReason;
-    final detailsController = TextEditingController();
-    bool blockSender = false;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('Пожаловаться на сообщение'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[200],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    message.text ?? 'Медиа сообщение',
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text('Причина жалобы:'),
-                const SizedBox(height: 8),
-                ...['Спам', 'Оскорбления', 'Неприемлемый контент', 'Мошенничество', 'Другое']
-                    .map((reason) => RadioListTile<String>(
-                          title: Text(reason),
-                          value: reason,
-                          groupValue: selectedReason,
-                          onChanged: (value) => setState(() => selectedReason = value),
-                        )),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: detailsController,
-                  decoration: const InputDecoration(
-                    labelText: 'Дополнительные детали (необязательно)',
-                    border: OutlineInputBorder(),
-                  ),
-                  maxLines: 3,
-                ),
-                const SizedBox(height: 8),
-                CheckboxListTile(
-                  value: blockSender,
-                  onChanged: (value) => setState(() => blockSender = value ?? false),
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text('Заблокировать автора сообщения'),
-                  subtitle: const Text('Скрыть будущие сообщения этого пользователя'),
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                detailsController.dispose();
-                Navigator.of(context).pop(false);
-              },
-              child: const Text('Отмена'),
-            ),
-            ElevatedButton(
-              onPressed: selectedReason == null
-                  ? null
-                  : () => Navigator.of(context).pop(true),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Отправить жалобу'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (confirmed != true || selectedReason == null) {
-      detailsController.dispose();
-      return;
-    }
-
-    final result = await apiService.reportMessage(
-      messageId: message.id,
-      chatId: widget.chatId,
-      reason: selectedReason!,
-      details: detailsController.text.trim().isEmpty ? null : detailsController.text.trim(),
-    );
-    
-    if (result['success'] == true && blockSender && message.senderId.isNotEmpty) {
-      await apiService.blockUser(message.senderId);
-      await context.read<ChatProvider>().loadMessages(widget.chatId);
-    }
-    
-    detailsController.dispose();
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result['message'] ?? 'Жалоба отправлена'),
-          backgroundColor: result['success'] == true ? Colors.green : Colors.red,
-        ),
-      );
-    }
-  }
-
   Future<void> _pickAndSendImage() async {
     if (kIsWeb) {
       if (mounted) {
@@ -690,48 +543,76 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     
     try {
-      bool photoGranted = false;
-      bool permanentlyDenied = false;
-
-      if (Platform.isIOS) {
-        print('📷 Requesting photo library permission via native method...');
-        photoGranted = await _requestPermissionNative('requestPhotoLibraryPermission');
-        print('📷 Native photo library permission result: $photoGranted');
-      } else {
+      // Запрашиваем разрешение на доступ к галерее (для iOS 14+)
+      if (!kIsWeb) {
         var photosStatus = await Permission.photos.status;
-        if (photosStatus.isDenied) {
-          photosStatus = await Permission.photos.request();
-        }
-        if (photosStatus.isGranted) {
-          photoGranted = true;
-        } else {
+        print('📷 Photos permission status: $photosStatus');
+        
+        // На iOS всегда запрашиваем разрешение явно
+        // Это важно для эмулятора и устройств, где разрешение может быть не определено
+        print('📷 Requesting photos permission...');
+        photosStatus = await Permission.photos.request();
+        print('📷 Photos permission after request: $photosStatus');
+        
+        // Проверяем статус еще раз после запроса
+        photosStatus = await Permission.photos.status;
+        print('📷 Photos permission final status: $photosStatus');
+        
+        // Если разрешение на фото не предоставлено, пробуем запросить разрешение на медиа
+        if (!photosStatus.isGranted) {
+          print('📷 Trying mediaLibrary permission...');
           var mediaStatus = await Permission.mediaLibrary.status;
-          if (mediaStatus.isDenied) {
-            mediaStatus = await Permission.mediaLibrary.request();
+          print('📷 MediaLibrary permission status: $mediaStatus');
+          
+          print('📷 Requesting mediaLibrary permission...');
+          mediaStatus = await Permission.mediaLibrary.request();
+          print('📷 MediaLibrary permission after request: $mediaStatus');
+          
+          // Проверяем статус еще раз после запроса
+          mediaStatus = await Permission.mediaLibrary.status;
+          print('📷 MediaLibrary permission final status: $mediaStatus');
+          
+          if (!mediaStatus.isGranted) {
+            print('❌ Photos/media permission not granted: $mediaStatus');
+            if (mounted) {
+              final message = mediaStatus.isPermanentlyDenied
+                  ? 'Разрешение на доступ к галерее было отклонено. Пожалуйста, включите его в настройках приложения.'
+                  : 'Необходимо разрешение на доступ к галерее';
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(message),
+                  action: SnackBarAction(
+                    label: 'Настройки',
+                    onPressed: () => openAppSettings(),
+                  ),
+                  duration: const Duration(seconds: 7),
+                ),
+              );
+            }
+            return;
           }
-          photoGranted = mediaStatus.isGranted;
-          permanentlyDenied =
-              photosStatus.isPermanentlyDenied || mediaStatus.isPermanentlyDenied;
         }
-      }
-
-      if (!photoGranted) {
-        if (mounted) {
-          final message = permanentlyDenied
-              ? 'Доступ к галерее отклонен. Включите его в настройках приложения.'
-              : 'Необходимо разрешение на доступ к галерее';
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(message),
-              action: SnackBarAction(
-                label: 'Настройки',
-                onPressed: () => openAppSettings(),
+        
+        // Если разрешение на фото тоже не предоставлено, показываем сообщение
+        if (!photosStatus.isGranted) {
+          print('❌ Photos permission not granted: $photosStatus');
+          if (mounted) {
+            final message = photosStatus.isPermanentlyDenied
+                ? 'Разрешение на доступ к галерее было отклонено. Пожалуйста, включите его в настройках приложения.'
+                : 'Необходимо разрешение на доступ к галерее';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(message),
+                action: SnackBarAction(
+                  label: 'Настройки',
+                  onPressed: () => openAppSettings(),
+                ),
+                duration: const Duration(seconds: 7),
               ),
-              duration: const Duration(seconds: 6),
-            ),
-          );
+            );
+          }
+          return;
         }
-        return;
       }
       
       final XFile? image = await _picker.pickImage(
@@ -750,9 +631,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (token == null || authProvider.currentUser == null) return;
 
       final apiService = authProvider.apiService;
-      // Ensure upload uses the same auth token (some call sites forget to set it).
-      apiService.setToken(token);
-      print('🖼️ Uploading image: ${image.path}');
       final url = await apiService.uploadFile(image.path);
 
       if (url != null) {
@@ -766,13 +644,6 @@ class _ChatScreenState extends State<ChatScreen> {
               currentUserId: currentUserId,
             );
         _scrollToBottom();
-      } else {
-        print('❌ Image upload returned null');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Не удалось загрузить фото')),
-          );
-        }
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -806,27 +677,24 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       // Запрашиваем разрешения для звонка
       if (!kIsWeb) {
-        // На iOS используем нативный метод запроса разрешений
-        bool microphoneGranted = false;
-        bool microphonePermanentlyDenied = false;
-        if (Platform.isIOS) {
-          print('🎤 Requesting microphone permission via native method...');
-          microphoneGranted = await _requestPermissionNative('requestMicrophonePermission');
-          print('🎤 Native microphone permission result: $microphoneGranted');
-        } else {
-          // На Android используем permission_handler
-          var microphoneStatus = await Permission.microphone.status;
-          if (microphoneStatus.isDenied) {
-            microphoneStatus = await Permission.microphone.request();
-          }
-          microphoneGranted = microphoneStatus.isGranted;
-          microphonePermanentlyDenied = microphoneStatus.isPermanentlyDenied;
-        }
+        // Проверяем и запрашиваем разрешение на микрофон
+        var microphoneStatus = await Permission.microphone.status;
+        print('🎤 Microphone permission status: $microphoneStatus');
         
-        if (!microphoneGranted) {
-          print('❌ Microphone permission not granted');
+        // На iOS всегда запрашиваем разрешение явно
+        // Это важно для эмулятора и устройств, где разрешение может быть не определено
+        print('🎤 Requesting microphone permission...');
+        microphoneStatus = await Permission.microphone.request();
+        print('🎤 Microphone permission after request: $microphoneStatus');
+        
+        // Проверяем статус еще раз после запроса
+        microphoneStatus = await Permission.microphone.status;
+        print('🎤 Microphone permission final status: $microphoneStatus');
+        
+        if (!microphoneStatus.isGranted) {
+          print('❌ Microphone permission not granted: $microphoneStatus');
           if (mounted) {
-            final message = microphonePermanentlyDenied
+            final message = microphoneStatus.isPermanentlyDenied
                 ? 'Разрешение на микрофон было отклонено. Пожалуйста, включите его в настройках приложения.'
                 : 'Необходимо разрешение на использование микрофона';
             ScaffoldMessenger.of(context).showSnackBar(
@@ -846,26 +714,22 @@ class _ChatScreenState extends State<ChatScreen> {
         
         // Для видеозвонка проверяем и запрашиваем разрешение на камеру
         if (isVideo) {
-          bool cameraGranted = false;
-          bool cameraPermanentlyDenied = false;
-          if (Platform.isIOS) {
-            print('📷 Requesting camera permission via native method...');
-            cameraGranted = await _requestPermissionNative('requestCameraPermission');
-            print('📷 Native camera permission result: $cameraGranted');
-          } else {
-            // На Android используем permission_handler
-            var cameraStatus = await Permission.camera.status;
-            if (cameraStatus.isDenied) {
-              cameraStatus = await Permission.camera.request();
-            }
-            cameraGranted = cameraStatus.isGranted;
-            cameraPermanentlyDenied = cameraStatus.isPermanentlyDenied;
-          }
+          var cameraStatus = await Permission.camera.status;
+          print('📷 Camera permission status: $cameraStatus');
           
-          if (!cameraGranted) {
-            print('❌ Camera permission not granted');
+          // На iOS всегда запрашиваем разрешение явно
+          print('📷 Requesting camera permission...');
+          cameraStatus = await Permission.camera.request();
+          print('📷 Camera permission after request: $cameraStatus');
+          
+          // Проверяем статус еще раз после запроса
+          cameraStatus = await Permission.camera.status;
+          print('📷 Camera permission final status: $cameraStatus');
+          
+          if (!cameraStatus.isGranted) {
+            print('❌ Camera permission not granted: $cameraStatus');
             if (mounted) {
-              final message = cameraPermanentlyDenied
+              final message = cameraStatus.isPermanentlyDenied
                   ? 'Разрешение на камеру было отклонено. Пожалуйста, включите его в настройках приложения.'
                   : 'Необходимо разрешение на использование камеры';
               ScaffoldMessenger.of(context).showSnackBar(
@@ -956,27 +820,24 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     
     try {
-      // Запрашиваем разрешение на микрофон
-      bool microphoneGranted = false;
-      bool microphonePermanentlyDenied = false;
-      if (Platform.isIOS) {
-        print('🎤 Requesting microphone permission for recording via native method...');
-        microphoneGranted = await _requestPermissionNative('requestMicrophonePermission');
-        print('🎤 Native microphone permission result: $microphoneGranted');
-      } else {
-        // На Android используем permission_handler
-        var microphoneStatus = await Permission.microphone.status;
-        if (microphoneStatus.isDenied) {
-          microphoneStatus = await Permission.microphone.request();
-        }
-        microphoneGranted = microphoneStatus.isGranted;
-        microphonePermanentlyDenied = microphoneStatus.isPermanentlyDenied;
-      }
+      // Проверяем и запрашиваем разрешение на микрофон
+      var microphoneStatus = await Permission.microphone.status;
+      print('🎤 Microphone permission status for recording: $microphoneStatus');
       
-      if (!microphoneGranted) {
-        print('❌ Microphone permission not granted for recording');
+      // На iOS всегда запрашиваем разрешение явно
+      // Это важно для эмулятора и устройств, где разрешение может быть не определено
+      print('🎤 Requesting microphone permission for recording...');
+      microphoneStatus = await Permission.microphone.request();
+      print('🎤 Microphone permission after request: $microphoneStatus');
+      
+      // Проверяем статус еще раз после запроса
+      microphoneStatus = await Permission.microphone.status;
+      print('🎤 Microphone permission final status: $microphoneStatus');
+      
+      if (!microphoneStatus.isGranted) {
+        print('❌ Microphone permission not granted for recording: $microphoneStatus');
         if (mounted) {
-          final message = microphonePermanentlyDenied
+          final message = microphoneStatus.isPermanentlyDenied
               ? 'Разрешение на микрофон было отклонено. Пожалуйста, включите его в настройках приложения для записи голосовых сообщений.'
               : 'Необходимо разрешение на использование микрофона для записи голосовых сообщений';
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1065,28 +926,9 @@ class _ChatScreenState extends State<ChatScreen> {
       final path = await _audioService.stopRecording();
       if (path == null) return;
       
-      final authService = AuthService();
-      final token = await authService.getToken();
-      if (token == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Нет токена авторизации, не могу отправить')),
-          );
-        }
-        return;
-      }
-      _audioService.setToken(token);
-
       // Загружаем аудио файл
       final url = await _audioService.uploadAudio(path);
-      if (url == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Не удалось загрузить голосовое')),
-          );
-        }
-        return;
-      }
+      if (url == null) return;
       
       // Отправляем голосовое сообщение
       final authProvider = context.read<AuthProvider>();
@@ -1133,27 +975,11 @@ class _ChatScreenState extends State<ChatScreen> {
       } else {
         fullUrl = ImageUtils.getFullImageUrl(url);
       }
-      print('🔊 Playing audio message: $messageId');
-      print('🔊 Audio URL: $fullUrl');
-      try {
-        await _audioService.playAudio(fullUrl);
-        if (!mounted) return;
-        setState(() {
-          _playingMessageId = messageId;
-          _playingStates[messageId] = true;
-        });
-      } catch (e) {
-        // Extra guard: avoid crashes if the native player throws outside AudioService try/catch.
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Не удалось воспроизвести голосовое: $e')),
-          );
-          setState(() {
-            _playingMessageId = null;
-            _playingStates[messageId] = false;
-          });
-        }
-      }
+      await _audioService.playAudio(fullUrl);
+      setState(() {
+        _playingMessageId = messageId;
+        _playingStates[messageId] = true;
+      });
     }
   }
   
@@ -1195,22 +1021,28 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget? _getChatAvatar() {
     if (_chat == null) return null;
     if (_chat!.isGroup) {
-      return AdaptiveAvatar(
-        photoUrl: _chat!.groupPhotoUrl,
-        radius: 20,
+      return CircleAvatar(
         backgroundColor: Colors.blue,
-        fallbackChild: const Icon(Icons.group, color: Colors.white),
+        backgroundImage: _chat!.groupPhotoUrl != null && _chat!.groupPhotoUrl!.isNotEmpty
+            ? NetworkImage(ImageUtils.getFullImageUrl(_chat!.groupPhotoUrl!))
+            : null,
+        child: _chat!.groupPhotoUrl == null || _chat!.groupPhotoUrl!.isEmpty
+            ? const Icon(Icons.group, color: Colors.white)
+            : null,
       );
     }
     if (_otherUser != null) {
-      return AdaptiveAvatar(
-        photoUrl: _otherUser!.photoUrl,
-        radius: 20,
+      return CircleAvatar(
         backgroundColor: Colors.blue,
-        fallbackChild: Text(
-          (_otherUser!.displayName?[0] ?? 'U').toUpperCase(),
-          style: const TextStyle(color: Colors.white),
-        ),
+        backgroundImage: _otherUser!.photoUrl != null && _otherUser!.photoUrl!.isNotEmpty
+            ? NetworkImage(ImageUtils.getFullImageUrl(_otherUser!.photoUrl))
+            : null,
+        child: _otherUser!.photoUrl == null || _otherUser!.photoUrl!.isEmpty
+            ? Text(
+                (_otherUser!.displayName?[0] ?? 'U').toUpperCase(),
+                style: const TextStyle(color: Colors.white),
+              )
+            : null,
       );
     }
     return const CircleAvatar(
@@ -1301,30 +1133,28 @@ class _ChatScreenState extends State<ChatScreen> {
                       final message = messages[index];
                       final isMe = message.senderId == currentUserId;
 
-                      return GestureDetector(
-                        onLongPress: !isMe ? () => _showMessageMenu(context, message) : null,
-                        child: Align(
-                          alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isMe ? Colors.blue : Colors.grey[300],
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (message.text != null)
-                                  Text(
-                                    message.text!,
-                                    style: TextStyle(
-                                      color: isMe ? Colors.white : Colors.black,
-                                    ),
+                      return Align(
+                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isMe ? Colors.blue : Colors.grey[300],
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (message.text != null)
+                                Text(
+                                  message.text!,
+                                  style: TextStyle(
+                                    color: isMe ? Colors.white : Colors.black,
                                   ),
+                                ),
                               if (message.mediaUrl != null)
                                 message.type == 'audio'
                                     ? Container(
@@ -1363,93 +1193,19 @@ class _ChatScreenState extends State<ChatScreen> {
                                       )
                                     : ClipRRect(
                                         borderRadius: BorderRadius.circular(8),
-                                        child: GestureDetector(
-                                          onTap: () {
-                                            final fullUrl = ImageUtils.getFullImageUrl(message.mediaUrl);
-                                            showDialog(
-                                              context: context,
-                                              builder: (_) => Dialog(
-                                                insetPadding: const EdgeInsets.all(12),
-                                                backgroundColor: Colors.black,
-                                                child: Stack(
-                                                  children: [
-                                                    Positioned.fill(
-                                                      child: InteractiveViewer(
-                                                        child: (!kIsWeb && Platform.isIOS)
-                                                            ? FutureBuilder(
-                                                                future: MediaFetcher.fetchBytes(fullUrl),
-                                                                builder: (context, snap) {
-                                                                  if (!snap.hasData) {
-                                                                    return const Center(
-                                                                      child: CircularProgressIndicator(color: Colors.white),
-                                                                    );
-                                                                  }
-                                                                  final bytes = snap.data!;
-                                                                  return Image.memory(bytes, fit: BoxFit.contain);
-                                                                },
-                                                              )
-                                                            : Image.network(
-                                                                fullUrl,
-                                                                fit: BoxFit.contain,
-                                                                errorBuilder: (context, error, stackTrace) {
-                                                                  return const Center(
-                                                                    child: Icon(Icons.error, color: Colors.white),
-                                                                  );
-                                                                },
-                                                              ),
-                                                      ),
-                                                    ),
-                                                    Positioned(
-                                                      top: 8,
-                                                      right: 8,
-                                                      child: IconButton(
-                                                        icon: const Icon(Icons.close, color: Colors.white),
-                                                        onPressed: () => Navigator.of(context).pop(),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
+                                        child: Image.network(
+                                          ImageUtils.getFullImageUrl(message.mediaUrl),
+                                          width: 200,
+                                          height: 200,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (context, error, stackTrace) {
+                                            return Container(
+                                              width: 200,
+                                              height: 200,
+                                              color: Colors.grey[300],
+                                              child: const Icon(Icons.error),
                                             );
                                           },
-                                          child: (!kIsWeb && Platform.isIOS)
-                                              ? FutureBuilder(
-                                                  future: MediaFetcher.fetchBytes(
-                                                    ImageUtils.getFullImageUrl(message.mediaUrl),
-                                                  ),
-                                                  builder: (context, snap) {
-                                                    if (!snap.hasData) {
-                                                      return Container(
-                                                        width: 200,
-                                                        height: 200,
-                                                        color: Colors.grey[300],
-                                                        child: const Center(child: CircularProgressIndicator()),
-                                                      );
-                                                    }
-                                                    final bytes = snap.data!;
-                                                    return Image.memory(
-                                                      bytes,
-                                                      width: 200,
-                                                      height: 200,
-                                                      fit: BoxFit.cover,
-                                                      gaplessPlayback: true,
-                                                    );
-                                                  },
-                                                )
-                                              : Image.network(
-                                                  ImageUtils.getFullImageUrl(message.mediaUrl),
-                                                  width: 200,
-                                                  height: 200,
-                                                  fit: BoxFit.cover,
-                                                  errorBuilder: (context, error, stackTrace) {
-                                                    return Container(
-                                                      width: 200,
-                                                      height: 200,
-                                                      color: Colors.grey[300],
-                                                      child: const Icon(Icons.error),
-                                                    );
-                                                  },
-                                                ),
                                         ),
                                       ),
                               const SizedBox(height: 4),
@@ -1465,7 +1221,6 @@ class _ChatScreenState extends State<ChatScreen> {
                             ],
                           ),
                         ),
-                      ),
                       );
                     },
                   ),

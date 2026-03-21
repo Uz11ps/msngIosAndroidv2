@@ -4,7 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
-import '../widgets/adaptive_avatar.dart';
+import '../utils/image_utils.dart';
 import 'login_screen.dart';
 import 'link_phone_screen.dart';
 import 'eula_screen.dart';
@@ -100,17 +100,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 Center(
                   child: Stack(
                     children: [
-                      AdaptiveAvatar(
-                        photoUrl: user.photoUrl,
+                      CircleAvatar(
                         radius: 50,
                         backgroundColor: Colors.blue,
-                        fallbackChild: Text(
-                          user.displayName?[0].toUpperCase() ?? 'U',
-                          style: const TextStyle(
-                            fontSize: 32,
-                            color: Colors.white,
-                          ),
-                        ),
+                        backgroundImage: user.photoUrl != null
+                            ? NetworkImage(ImageUtils.getFullImageUrl(user.photoUrl))
+                            : null,
+                        child: user.photoUrl == null
+                            ? Text(
+                                user.displayName?[0].toUpperCase() ?? 'U',
+                                style: const TextStyle(
+                                  fontSize: 32,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : null,
                       ),
                       Positioned(
                         bottom: 0,

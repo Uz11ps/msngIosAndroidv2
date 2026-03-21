@@ -3,19 +3,13 @@ import 'package:provider/provider.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'config/api_config.dart';
-import 'services/http_overrides_setup.dart';
 import 'providers/auth_provider.dart';
 import 'providers/chat_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/chats_screen.dart';
-import 'screens/eula_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await setupNetworkOverrides();
-  await ApiConfig.init();
   // Инициализируем форматирование дат для русского языка (только для не-веб платформ)
   if (!kIsWeb) {
     try {
@@ -45,15 +39,9 @@ Future<void> _requestPermissions() async {
     
     final microphoneStatus = await Permission.microphone.status;
     print('🎤 Microphone permission status on startup: $microphoneStatus');
-    if (microphoneStatus.isPermanentlyDenied) {
-      print('⚠️ WARNING: Microphone permission is permanently denied. Please delete the app and reinstall it, or enable it in Settings.');
-    }
     
     final cameraStatus = await Permission.camera.status;
     print('📷 Camera permission status on startup: $cameraStatus');
-    if (cameraStatus.isPermanentlyDenied) {
-      print('⚠️ WARNING: Camera permission is permanently denied. Please delete the app and reinstall it, or enable it in Settings.');
-    }
     
     // Для Android 13+ запрашиваем разрешение на уведомления при запуске
     // На iOS уведомления запрашиваются автоматически при первом использовании
@@ -121,79 +109,25 @@ class AuthWrapper extends StatefulWidget {
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
-  bool _eulaAccepted = false;
-  bool _checkingEula = true;
-
   @override
   void initState() {
     super.initState();
-    _checkEulaStatus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Добавляем таймаут для предотвращения зависания при проблемах с сетью
-      context.read<AuthProvider>().init().timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          print('⚠️ AuthWrapper: Initialization timeout, showing login screen');
-          if (mounted) {
-            setState(() {}); // Обновляем состояние для показа экрана входа
-          }
-        },
-      ).catchError((error) {
-        print('💥 AuthWrapper: Initialization error: $error');
-        // Не блокируем запуск приложения, показываем экран входа
+      context.read<AuthProvider>().init().then((_) {
         if (mounted) {
-          setState(() {});
+          final isLoggedIn = context.read<AuthProvider>().isLoggedIn;
+          if (isLoggedIn) {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (_) => const ChatsScreen()),
+            );
+          }
         }
       });
     });
   }
 
-  Future<void> _checkEulaStatus() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final accepted = prefs.getBool('eula_accepted') ?? false;
-      final acceptedVersion = prefs.getString('eula_accepted_version');
-      final isLatestAccepted = accepted && acceptedVersion == kCurrentTermsVersion;
-      if (mounted) {
-        setState(() {
-          _eulaAccepted = isLatestAccepted;
-          _checkingEula = false;
-        });
-      }
-    } catch (e) {
-      print('⚠️ Error checking EULA status: $e');
-      if (mounted) {
-        setState(() {
-          _eulaAccepted = false;
-          _checkingEula = false;
-        });
-      }
-    }
-  }
-
-  void _onEulaAccepted() {
-    setState(() {
-      _eulaAccepted = true;
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
-    // Показываем загрузку пока проверяем EULA
-    if (_checkingEula) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    // Если EULA не принят, показываем экран EULA
-    if (!_eulaAccepted) {
-      return EulaScreen(
-        onAccept: _onEulaAccepted,
-        termsVersion: kCurrentTermsVersion,
-      );
-    }
-
     final authProvider = context.watch<AuthProvider>();
 
     if (authProvider.isLoading) {

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import '../providers/auth_provider.dart';
 import 'register_screen.dart';
 import 'chats_screen.dart';
+import 'diagnostics_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -18,60 +18,10 @@ class _LoginScreenState extends State<LoginScreen> {
   final _phoneController = TextEditingController();
   final _codeController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-  final _scrollController = ScrollController();
-  final Connectivity _connectivity = Connectivity();
   
+  bool _isPhoneLogin = false;
+  bool _otpSent = false;
   int _countdown = 0;
-  bool _isCellular = false;
-  bool _warningShown = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkNetworkType();
-    // Слушаем изменения типа сети
-    _connectivity.onConnectivityChanged.listen((List<ConnectivityResult> result) {
-      _checkNetworkType();
-    });
-  }
-
-  Future<void> _checkNetworkType() async {
-    try {
-      final connectivityResult = await _connectivity.checkConnectivity();
-      final isCellular = connectivityResult.contains(ConnectivityResult.mobile) ||
-                        connectivityResult.contains(ConnectivityResult.other);
-      
-      if (mounted) {
-        final wasCellular = _isCellular;
-        setState(() {
-          _isCellular = isCellular;
-        });
-        
-        // Показываем предупреждение один раз при использовании мобильных данных
-        if (isCellular && !_warningShown) {
-          _warningShown = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              _showCellularWarning();
-            }
-          });
-        }
-        
-        // Если переключились с мобильных данных на Wi-Fi, сбрасываем флаг предупреждения
-        if (wasCellular && !isCellular) {
-          _warningShown = false;
-        }
-      }
-    } catch (e) {
-      print('⚠️ Failed to check network type: $e');
-    }
-  }
-
-  void _showCellularWarning() {
-    // Предупреждение больше не нужно - HTTPS работает через мобильные данные
-    // Оставляем метод для совместимости, но не показываем диалог
-    print('📱 Using cellular network - HTTPS should work fine');
-  }
 
   @override
   void dispose() {
@@ -79,13 +29,10 @@ class _LoginScreenState extends State<LoginScreen> {
     _passwordController.dispose();
     _phoneController.dispose();
     _codeController.dispose();
-    _scrollController.dispose();
     super.dispose();
   }
 
   void _startCountdown() {
-    if (!mounted) return;
-    
     setState(() {
       _countdown = 60;
     });
@@ -126,53 +73,28 @@ class _LoginScreenState extends State<LoginScreen> {
     final phoneNumber = _normalizePhoneNumber(_phoneController.text.trim());
     final authProvider = context.read<AuthProvider>();
     
-    print('📱 Sending OTP to: $phoneNumber');
-    
     final success = await authProvider.sendOtp(phoneNumber);
-    print('📱 OTP send result: $success');
     
     if (success) {
-      print('📱 OTP sent successfully');
-      _startCountdown();
-      
-      // Принудительно обновляем UI через setState
-      if (mounted) {
-        setState(() {
-          // Пустой setState для принудительного обновления
-        });
-      }
-      
-      // Используем addPostFrameCallback для гарантии обновления UI
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          // Прокручиваем к полю ввода кода
-          if (_scrollController.hasClients) {
-            _scrollController.animateTo(
-              _scrollController.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOut,
-            );
-          }
-          
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('SMS код отправлен'),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
+      setState(() {
+        _otpSent = true;
       });
-    } else {
-      print('❌ OTP send failed');
+      _startCountdown();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(authProvider.errorMessage ?? 'Ошибка отправки SMS'),
-            backgroundColor: Colors.red,
+          const SnackBar(
+            content: Text('SMS код отправлен'),
+            backgroundColor: Colors.green,
           ),
         );
       }
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(authProvider.errorMessage ?? 'Ошибка отправки SMS'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -185,12 +107,14 @@ class _LoginScreenState extends State<LoginScreen> {
     
     final success = await authProvider.verifyOtp(phoneNumber, code);
 
-    if (success && mounted) {
+    if (success) {
       await Future.delayed(const Duration(milliseconds: 200));
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const ChatsScreen()),
-        (route) => false,
-      );
+      
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const ChatsScreen()),
+        );
+      }
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -215,19 +139,71 @@ class _LoginScreenState extends State<LoginScreen> {
     print('📱 LoginScreen: Current user: ${authProvider.currentUser?.id}');
     print('📱 LoginScreen: Is logged in: ${authProvider.isLoggedIn}');
 
-    if (success && mounted) {
+    if (success) {
       // Небольшая задержка для гарантии обновления состояния
       await Future.delayed(const Duration(milliseconds: 200));
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const ChatsScreen()),
-        (route) => false,
-      );
+      
+      if (mounted) {
+        print('📱 LoginScreen: Navigating to ChatsScreen...');
+        print('📱 LoginScreen: Final check - isLoggedIn: ${authProvider.isLoggedIn}');
+        print('📱 LoginScreen: Final check - currentUser: ${authProvider.currentUser?.id}');
+        
+        // Используем pushReplacement для замены экрана логина на экран чатов
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const ChatsScreen()),
+        );
+      } else {
+        print('⚠️ LoginScreen: Widget not mounted, cannot navigate');
+      }
     } else if (mounted) {
       print('📱 LoginScreen: Showing error: ${authProvider.errorMessage}');
+      final errorMessage = authProvider.errorMessage ?? 'Ошибка входа';
+      
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(authProvider.errorMessage ?? 'Ошибка входа'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                errorMessage,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              if (errorMessage.contains('Сервер') || 
+                  errorMessage.contains('подключения') ||
+                  errorMessage.contains('сеть'))
+                const SizedBox(height: 4),
+              if (errorMessage.contains('Сервер') || 
+                  errorMessage.contains('подключения') ||
+                  errorMessage.contains('сеть'))
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const DiagnosticsScreen(),
+                      ),
+                    );
+                  },
+                  child: const Text(
+                    'Проверить подключение',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+            ],
+          ),
           backgroundColor: Colors.red,
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'Диагностика',
+            textColor: Colors.white,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const DiagnosticsScreen(),
+                ),
+              );
+            },
+          ),
         ),
       );
     }
@@ -235,24 +211,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<AuthProvider>(
-      builder: (context, authProvider, _) {
-        final otpSent = authProvider.otpSent;
-        final isPhoneLogin = authProvider.isPhoneLogin;
-        print('📱 LoginScreen build: otpSent=$otpSent, isPhoneLogin=$isPhoneLogin');
-        print('📱 Will show code input: ${otpSent && isPhoneLogin}');
-        return Scaffold(
-          body: SafeArea(
-            child: Center(
-              child: SingleChildScrollView(
-                controller: _scrollController,
-                padding: const EdgeInsets.all(24.0),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24.0),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                   const Icon(
                     Icons.chat_bubble_outline,
                     size: 80,
@@ -268,33 +237,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 48),
-                  // Индикатор мобильного интернета (HTTPS работает через мобильные данные)
-                  if (_isCellular)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      margin: const EdgeInsets.only(bottom: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade50,
-                        border: Border.all(color: Colors.blue.shade300),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.info_outline, 
-                               color: Colors.blue.shade700, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Используется мобильный интернет. Приложение работает через HTTPS.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.blue.shade900,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   SegmentedButton<bool>(
                     segments: const [
                       ButtonSegment<bool>(
@@ -308,19 +250,18 @@ class _LoginScreenState extends State<LoginScreen> {
                         icon: Icon(Icons.phone),
                       ),
                     ],
-                    selected: {isPhoneLogin},
+                    selected: {_isPhoneLogin},
                     onSelectionChanged: (Set<bool> newSelection) {
-                      final authProvider = context.read<AuthProvider>();
-                      authProvider.resetOtpState();
-                      authProvider.setPhoneLogin(newSelection.first);
                       setState(() {
+                        _isPhoneLogin = newSelection.first;
+                        _otpSent = false;
                         _countdown = 0;
                         _codeController.clear();
                       });
                     },
                   ),
                   const SizedBox(height: 24),
-                  if (!isPhoneLogin) ...[
+                  if (!_isPhoneLogin) ...[
                     TextFormField(
                       controller: _emailController,
                       keyboardType: TextInputType.emailAddress,
@@ -401,36 +342,32 @@ class _LoginScreenState extends State<LoginScreen> {
                       },
                     ),
                     const SizedBox(height: 16),
-                    Builder(
-                      builder: (_) {
-                        print('📱 Rendering OTP section: otpSent=$otpSent');
-                        if (!otpSent) {
-                          print('📱 Rendering: Send OTP button');
+                    if (!_otpSent)
+                      Consumer<AuthProvider>(
+                        builder: (context, authProvider, _) {
                           return ElevatedButton(
-                        onPressed: authProvider.isLoading || _countdown > 0
-                            ? null
-                            : _sendOtp,
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                        ),
-                        child: authProvider.isLoading
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : Text(_countdown > 0
-                                ? 'Повторить через $_countdown сек'
-                                : 'Отправить код'),
+                            onPressed: authProvider.isLoading || _countdown > 0
+                                ? null
+                                : _sendOtp,
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
+                            child: authProvider.isLoading
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Text(_countdown > 0
+                                    ? 'Повторить через $_countdown сек'
+                                    : 'Отправить код'),
                           );
-                        } else {
-                          print('📱 Rendering: Code input field');
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              TextFormField(
+                        },
+                      )
+                    else ...[
+                      TextFormField(
                         controller: _codeController,
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(
@@ -453,22 +390,26 @@ class _LoginScreenState extends State<LoginScreen> {
                       Row(
                         children: [
                           Expanded(
-                            child: ElevatedButton(
-                              onPressed: authProvider.isLoading
-                                  ? null
-                                  : _verifyOtp,
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                              ),
-                              child: authProvider.isLoading
-                                  ? const SizedBox(
-                                      height: 20,
-                                      width: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Text('Войти'),
+                            child: Consumer<AuthProvider>(
+                              builder: (context, authProvider, _) {
+                                return ElevatedButton(
+                                  onPressed: authProvider.isLoading
+                                      ? null
+                                      : _verifyOtp,
+                                  style: ElevatedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(vertical: 16),
+                                  ),
+                                  child: authProvider.isLoading
+                                      ? const SizedBox(
+                                          height: 20,
+                                          width: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Text('Войти'),
+                                );
+                              },
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -476,9 +417,8 @@ class _LoginScreenState extends State<LoginScreen> {
                             onPressed: _countdown > 0
                                 ? null
                                 : () {
-                                    final authProvider = context.read<AuthProvider>();
-                                    authProvider.resetOtpState();
                                     setState(() {
+                                      _otpSent = false;
                                       _codeController.clear();
                                     });
                                   },
@@ -489,30 +429,36 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ),
                     ],
-                  );
-                }
-              },
-            ),
                   ],
-              const SizedBox(height: 16),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const RegisterScreen(),
-                    ),
-                  );
-                },
-                child: const Text('Нет аккаунта? Зарегистрироваться'),
-              ),
-                    ],
+                  const SizedBox(height: 16),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const RegisterScreen(),
+                        ),
+                      );
+                    },
+                    child: const Text('Нет аккаунта? Зарегистрироваться'),
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const DiagnosticsScreen(),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.bug_report, size: 18),
+                    label: const Text('Диагностика подключения'),
+                  ),
+                ],
               ),
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

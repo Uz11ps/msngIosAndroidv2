@@ -30,6 +30,11 @@ const TELEGRAM_GATEWAY_TOKEN = 'AAEqMQAAxLHukRbH3x_aYspgyiVgIhQhQZBU4_86f_RvOg';
 
 app.use(cors());
 app.use(express.json());
+// Middleware для установки Content-Type для всех ответов (должен быть раньше маршрутов)
+app.use((req, res, next) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  next();
+});
 app.use('/uploads', express.static('uploads'));
 
 const storage = multer.diskStorage({
@@ -245,12 +250,6 @@ app.post('/api/auth/email-register', async (req, res) => {
       message: 'Ошибка сервера при регистрации. Попробуйте позже или обратитесь в поддержку.'
     });
   }
-});
-
-// Middleware для установки Content-Type для всех ответов
-app.use((req, res, next) => {
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  next();
 });
 
 // Добавим middleware для HTTP запросов (определяем ДО использования)

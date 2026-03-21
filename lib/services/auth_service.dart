@@ -33,44 +33,22 @@ class AuthService {
     } catch (e, stackTrace) {
       print('💥 AuthService login exception: $e');
       print('💥 Stack trace: $stackTrace');
-      _lastError = 'Ошибка входа: ${e.toString()}';
       return false;
     }
   }
 
   Future<bool> register(
       String email, String password, String displayName) async {
-    try {
-      print('📝 AuthService: Starting registration...');
-      print('📝 AuthService: Email: $email');
-      print('📝 AuthService: DisplayName: $displayName');
-      
-      final result =
-          await _apiService.emailRegister(email, password, displayName);
-      
-      print('📝 AuthService: Registration result: ${result['success']}');
-      print('📝 AuthService: Registration message: ${result['message']}');
-      
-      if (result['success'] == true) {
-        final token = result['token'] as String;
-        final user = result['user'] as User;
-        print('📝 AuthService: Saving auth data...');
-        await _saveAuthData(token, user);
-        _apiService.setToken(token);
-        print('📝 AuthService: Registration successful!');
-        _lastError = null;
-        return true;
-      }
-      
-      _lastError = result['message'] as String? ?? 'Ошибка регистрации';
-      print('📝 AuthService: Registration failed: $_lastError');
-      return false;
-    } catch (e, stackTrace) {
-      print('💥 AuthService register exception: $e');
-      print('💥 Stack trace: $stackTrace');
-      _lastError = 'Ошибка регистрации: $e';
-      return false;
+    final result =
+        await _apiService.emailRegister(email, password, displayName);
+    if (result['success'] == true) {
+      final token = result['token'] as String;
+      final user = result['user'] as User;
+      await _saveAuthData(token, user);
+      _apiService.setToken(token);
+      return true;
     }
+    return false;
   }
 
   Future<bool> sendOtp(String phoneNumber) async {
